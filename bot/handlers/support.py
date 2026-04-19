@@ -8,7 +8,7 @@ from utils.buttons import SUPPORT_EN, SUPPORT_RU
 
 router = Router()
 
-SUPPORT_USERNAME = "@voidModeSupport"
+from config.support import SUPPORT_USERNAME
 
 
 def build_support_text(lang: str) -> str:

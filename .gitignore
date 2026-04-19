@@ -13,6 +13,7 @@ env/
 # Environment variables
 .env
 .env.*
+!.env.example
 
 # Logs
 *.log
@@ -48,9 +49,10 @@ dist/
 .from.swp
 .html.swp
 .import.swp
-get_tariff_inline_keyboard
-
 
 # backups
 *.bak
 *.bak2
+
+# accidental nested copy
+dev/
