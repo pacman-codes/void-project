@@ -12,7 +12,7 @@ from bot.keyboards.user import (
     get_tariff_inline_keyboard,
 )
 from db.database import async_session_maker
-from db.models import User
+from db.models import User, VPNAccess
 from services.access_service import get_access_status
 from services.legal_service import accept_terms_for_user, get_terms_status
 from services.payment_service import (
@@ -32,9 +32,7 @@ from utils.buttons import RENEW_EN, RENEW_RU, SUBSCRIPTION_EN, SUBSCRIPTION_RU
 
 router = Router()
 
-OFFER_URL = "https://telegra.ph/OFERTA-04-17-5"
-PRIVACY_URL = "https://telegra.ph/POLITIKA-KONFIDENCIALNOSTI-04-17-98"
-RULES_URL = "https://telegra.ph/PRAVILA-ISPOLZOVANIYA-04-17"
+from config.links import OFFER_URL, PRIVACY_URL, RULES_URL
 DEFAULT_TRAFFIC_LIMIT_MB = 3072
 
 
@@ -569,6 +567,148 @@ async def subscription_paid(callback: CallbackQuery) -> None:
     )
     await safe_callback_answer(callback)
 
+
+
+def build_devices_text(
+    lang: str,
+    access_type: str | None,
+    device_limit: int,
+    used_devices: int,
+    accesses: list[VPNAccess],
+) -> str:
+    if access_type == "paid":
+        if lang == "en":
+            header = (
+                "🔑 <b>Devices</b>\n\n"
+                f"📱 In use: <b>{used_devices} / {device_limit}</b>\n\n"
+            )
+            if accesses:
+                items = []
+                for access in accesses:
+                    title = access.device_name or f"Device {access.device_number}"
+                    key = access.config_url or "Key not found"
+                    items.append(
+                        f"<b>{title}</b>\n"
+                        f"<code>{key}</code>"
+                    )
+                return header + "\n\n".join(items)
+            return header + "No keys yet."
+        header = (
+            "🔑 <b>Устройства</b>\n\n"
+            f"📱 Используется: <b>{used_devices} / {device_limit}</b>\n\n"
+        )
+        if accesses:
+            items = []
+            for access in accesses:
+                title = access.device_name or f"Устройство {access.device_number}"
+                key = access.config_url or "Ключ не найден"
+                items.append(
+                    f"<b>{title}</b>\n"
+                    f"<code>{key}</code>"
+                )
+            return header + "\n\n".join(items)
+        return header + "Пока ключей нет."
+
+    free_key = accesses[0].config_url if accesses else None
+
+    if lang == "en":
+        key_block = (
+            f"\n🔑 <b>Your key</b>\n<code>{free_key}</code>\n\n"
+            if free_key
+            else "\n🔑 <b>Your key</b>\nKey not found yet.\n\n"
+        )
+        return (
+            "🔑 <b>Devices</b>\n\n"
+            "Your free access includes <b>1 device</b>.\n"
+            "This is enough for a quick start.\n"
+            f"{key_block}"
+            "💎 Full access gives you:\n"
+            "• more devices\n"
+            "• maximum speed\n"
+            "• unlimited usage"
+        )
+
+    key_block = (
+        f"\n🔑 <b>Ваш ключ</b>\n<code>{free_key}</code>\n\n"
+        if free_key
+        else "\n🔑 <b>Ваш ключ</b>\nКлюч пока не найден.\n\n"
+    )
+    return (
+        "🔑 <b>Устройства</b>\n\n"
+        "В бесплатном доступе доступно <b>1 устройство</b>.\n"
+        "Этого хватает для быстрого старта.\n"
+        f"{key_block}"
+        "💎 Полный доступ даёт:\n"
+        "• больше устройств\n"
+        "• максимальную скорость\n"
+        "• использование без ограничений"
+    )
+
+
+def build_devices_keyboard(lang: str, access_type: str | None) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+
+    if access_type == "paid":
+        if lang == "en":
+            builder.button(text="🔑 Add device", callback_data="open_extra_device_offer", style="primary")
+            builder.button(text="🏠 Home", callback_data="back_home")
+        else:
+            builder.button(text="🔑 Добавить устройство", callback_data="open_extra_device_offer", style="primary")
+            builder.button(text="🏠 Главная", callback_data="back_home")
+        builder.adjust(1, 1)
+        return builder.as_markup()
+
+    if lang == "en":
+        builder.button(text="💎 Get full access", callback_data="open_subscription", style="success")
+        builder.button(text="🏠 Home", callback_data="back_home")
+    else:
+        builder.button(text="💎 Получить полный доступ", callback_data="open_subscription", style="success")
+        builder.button(text="🏠 Главная", callback_data="back_home")
+
+    builder.adjust(1, 1)
+    return builder.as_markup()
+
+
+@router.callback_query(F.data == "open_add_device")
+async def open_add_device(callback: CallbackQuery) -> None:
+    lang = await get_lang(callback.from_user.id)
+
+    async with async_session_maker() as session:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        user = user_result.scalar_one_or_none()
+
+        if user is None:
+            await safe_callback_answer(
+                callback,
+                "User not found" if lang == "en" else "Пользователь не найден",
+                show_alert=True,
+            )
+            return
+
+        accesses_result = await session.execute(
+            select(VPNAccess)
+            .where(VPNAccess.user_id == user.id, VPNAccess.is_active.is_(True))
+            .order_by(VPNAccess.device_number.asc(), VPNAccess.id.asc())
+        )
+        accesses = list(accesses_result.scalars().all())
+
+    text = build_devices_text(
+        lang=lang,
+        access_type=user.access_type,
+        device_limit=user.device_limit or 1,
+        used_devices=user.used_devices or 0,
+        accesses=accesses,
+    )
+
+    await safe_edit_text(
+        callback.message,
+        text=text,
+        reply_markup=build_devices_keyboard(lang, user.access_type),
+        parse_mode="HTML",
+    )
+    await safe_callback_answer(callback)
 
 @router.callback_query(F.data == "open_extra_device_offer")
 async def open_extra_device_offer(callback: CallbackQuery) -> None:

@@ -22,28 +22,34 @@ def format_expiry(dt: datetime | None, lang: str) -> str:
 
 def build_free_account_text(user: User, lang: str) -> str:
     remaining = max(0, (user.traffic_limit or 0) - (user.traffic_used or 0))
+    used = user.used_devices or 0
+    limit = user.device_limit or 1
 
     if lang == "en":
         return (
             "🎁 <b>Free access</b>\n\n"
-            f"📊 Traffic left: <b>{remaining} MB</b>\n"
-            "📱 Devices: <b>1</b>\n\n"
-            "⚠️ Limited speed and traffic\n\n"
-            "🚀 Upgrade to get:\n"
-            "• Unlimited traffic\n"
-            "• Higher speed\n"
-            "• More devices"
+            f"📱 Devices: <b>{used} / {limit}</b>\n"
+            f"📊 Traffic left: <b>{remaining} MB</b>\n\n"
+            "Good for basic use\n\n"
+            "🔑 Access key:\n"
+            "Available in the <b>Devices</b> section\n\n"
+            "💎 Full access gives:\n"
+            "• Maximum speed\n"
+            "• More devices\n"
+            "• Stable unlimited usage"
         )
 
     return (
-        "🎁 <b>Бесплатный доступ</b>\n\n"
-        f"📊 Осталось трафика: <b>{remaining} МБ</b>\n"
-        "📱 Устройства: <b>1</b>\n\n"
-        "⚠️ Ограниченная скорость и трафик\n\n"
-        "🚀 Полный доступ даёт:\n"
-        "• Безлимитный трафик\n"
+        "🆓 <b>Бесплатный доступ</b>\n\n"
+        f"📱 Устройства: <b>{used} / {limit}</b>\n"
+        f"📊 Осталось трафика: <b>{remaining} МБ</b>\n\n"
+        "Подходит для базового использования\n\n"
+        "🔑 Ключ доступа:\n"
+        "Доступен в разделе <b>Устройства</b>\n\n"
+        "💎 Полный доступ открывает:\n"
         "• Максимальную скорость\n"
-        "• Больше устройств"
+        "• Больше устройств\n"
+        "• Стабильную работу без ограничений"
     )
 
 
@@ -58,8 +64,8 @@ def build_paid_account_text(user: User, lang: str) -> str:
             "🚀 Everything works without limits\n\n"
             f"📅 Valid until: <b>{expiry}</b>\n"
             f"📱 Devices: <b>{used} / {limit}</b>\n\n"
-            "➕ Need more devices?\n"
-            "Tap <b>Add device</b>"
+            "🔑 Keys and device management:\n"
+            "Open <b>Devices</b>"
         )
 
     return (
@@ -67,8 +73,8 @@ def build_paid_account_text(user: User, lang: str) -> str:
         "🚀 Всё работает без ограничений\n\n"
         f"📅 Доступ до: <b>{expiry}</b>\n"
         f"📱 Устройства: <b>{used} / {limit}</b>\n\n"
-        "➕ Нужно ещё устройство?\n"
-        "Нажмите <b>Добавить устройство</b>"
+        "🔑 Ключи и управление устройствами:\n"
+        "Откройте раздел <b>Устройства</b>"
     )
 
 

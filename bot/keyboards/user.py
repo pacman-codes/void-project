@@ -118,7 +118,7 @@ def get_active_home_inline_keyboard(
             style="success",
         )
         builder.button(
-            text="➕ Add device" if lang == "en" else "➕ Добавить устройство",
+            text="🔑 Devices" if lang == "en" else "🔑 Устройства",
             callback_data="open_add_device",
             style="primary",
         )
@@ -154,10 +154,16 @@ def get_active_home_inline_keyboard(
         style="danger",
     )
     builder.button(
+        text="🔑 Devices" if lang == "en" else "🔑 Устройства",
+        callback_data="open_add_device",
+        style="primary",
+    )
+    builder.button(
         text="🌐 Language" if lang == "en" else "🌐 Язык",
         callback_data="open_language",
+        style="primary",
     )
-    builder.adjust(1, 2, 1)
+    builder.adjust(1, 2, 2)
     return builder.as_markup()
 
 
@@ -182,7 +188,7 @@ def get_account_inline_keyboard(
 
     if _is_paid(access_type):
         builder.button(
-            text="➕ Add device" if lang == "en" else "➕ Добавить устройство",
+            text="🔑 Devices" if lang == "en" else "🔑 Устройства",
             callback_data="open_add_device",
             style="primary",
         )
@@ -204,7 +210,17 @@ def get_account_inline_keyboard(
     if _is_paid(access_type):
         builder.adjust(1, 1, 2, 1)
     else:
-        builder.adjust(1, 2, 1)
+        builder.button(
+            text="🔑 Devices" if lang == "en" else "🔑 Устройства",
+            callback_data="open_add_device",
+            style="primary",
+        )
+        builder.button(
+            text="🌐 Language" if lang == "en" else "🌐 Язык",
+            callback_data="open_language",
+            style="primary",
+        )
+        builder.adjust(1, 2, 2)
 
     return builder.as_markup()
 
@@ -252,7 +268,7 @@ def get_support_inline_keyboard(
 
     if _is_paid(access_type):
         builder.button(
-            text="➕ Add device" if lang == "en" else "➕ Добавить устройство",
+            text="🔑 Devices" if lang == "en" else "🔑 Устройства",
             callback_data="open_add_device",
             style="primary",
         )
@@ -291,7 +307,7 @@ def get_access_inline_keyboard(
             style="success",
         )
         builder.button(
-            text="➕ Add device" if lang == "en" else "➕ Добавить устройство",
+            text="🔑 Devices" if lang == "en" else "🔑 Устройства",
             callback_data="open_add_device",
             style="primary",
         )
@@ -333,14 +349,14 @@ def get_device_limit_reached_keyboard(
     if _is_paid(access_type):
         if lang == "en":
             builder.button(
-                text="➕ Add one more device — 79 ₽/month",
+                text="🔑 Add one more device — 79 ₽/month",
                 callback_data="open_extra_device_offer",
                 style="success",
             )
             builder.button(text="🏠 Home", callback_data="back_home")
         else:
             builder.button(
-                text="➕ Добавить ещё одно устройство — 79 ₽/мес",
+                text="🔑 Добавить ещё одно устройство — 79 ₽/мес",
                 callback_data="open_extra_device_offer",
                 style="success",
             )

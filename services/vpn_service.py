@@ -1,3 +1,4 @@
+import os
 import uuid
 from urllib.parse import quote
 
@@ -9,6 +10,9 @@ from db.models import User, VPNAccess
 from services.panel_client import PanelClient
 
 
+from config.runtime import DEV_MODE, PANEL_ENABLED
+
+
 class VPNServiceError(Exception):
     """Ошибка сервиса выдачи доступа."""
 
@@ -18,6 +22,18 @@ class VPNService:
         self.panel_client = PanelClient()
         self.inbound_id = 8
         self.server_name = "main"
+
+    def _build_fake_config_url(self, telegram_id: int, device_number: int, client_id: str) -> str:
+        return (
+            f"vless://{client_id}@dev.local:443"
+            f"?type=tcp&security=reality"
+            f"&pbk=DEV_PUBLIC_KEY"
+            f"&fp=chrome"
+            f"&sni=dev.local"
+            f"&sid=dev{device_number}"
+            f"&headerType=none"
+            f"#user_{telegram_id}_{device_number}"
+        )
 
     def _build_config_url(self, inbound: dict, client: dict) -> str:
         protocol = inbound.get("protocol", "")
@@ -100,6 +116,23 @@ class VPNService:
     async def create_vpn_user(self, telegram_id: int, device_number: int) -> dict:
         email = f"user_{telegram_id}_{device_number}"
 
+        if DEV_MODE or not PANEL_ENABLED:
+            client_id = str(uuid.uuid4())
+            fake_client = {
+                "id": client_id,
+                "email": email,
+            }
+            config_url = self._build_fake_config_url(
+                telegram_id=telegram_id,
+                device_number=device_number,
+                client_id=client_id,
+            )
+            return {
+                "created": True,
+                "client": fake_client,
+                "config_url": config_url,
+            }
+
         existing_client = await self.panel_client.get_client_by_email(
             inbound_id=self.inbound_id,
             email=email,
@@ -172,7 +205,7 @@ class VPNService:
         if access is None:
             access = VPNAccess(
                 user_id=user.id,
-                server_name=self.server_name,
+                server_name=self.server_name if not DEV_MODE else "dev",
                 external_id=client["email"],
                 client_uuid=client["id"],
                 config_url=config_url,
@@ -182,7 +215,7 @@ class VPNService:
             )
             session.add(access)
         else:
-            access.server_name = self.server_name
+            access.server_name = self.server_name if not DEV_MODE else "dev"
             access.external_id = client["email"]
             access.client_uuid = client["id"]
             access.config_url = config_url
