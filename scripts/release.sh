@@ -103,7 +103,7 @@ release() {
 }
 
 # Условие для --dry-run
-if [[ "$1" == "--dry-run" ]]; then
+if [[ "${1:-}" == "--dry-run" ]]; then
   log "Dry run mode: Skipping actual operations."
   exit 0
 fi
