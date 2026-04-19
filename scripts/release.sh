@@ -4,7 +4,9 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$PROJECT_DIR/.env}"
 VENV_ACTIVATE="$PROJECT_DIR/venv/bin/activate"
-SERVICE_NAME="${SERVICE_NAME:-telegram-bot}"
+
+BOT_SERVICE_NAME="${BOT_SERVICE_NAME:-voidbot}"
+WEBHOOK_SERVICE_NAME="${WEBHOOK_SERVICE_NAME:-voidbot-webhook}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "ERROR: env file not found: $ENV_FILE"
@@ -24,7 +26,8 @@ export $(grep -v '^#' "$ENV_FILE" | xargs)
 echo "== RELEASE START =="
 echo "PROJECT_DIR=$PROJECT_DIR"
 echo "ENV_FILE=$ENV_FILE"
-echo "SERVICE_NAME=$SERVICE_NAME"
+echo "BOT_SERVICE_NAME=$BOT_SERVICE_NAME"
+echo "WEBHOOK_SERVICE_NAME=$WEBHOOK_SERVICE_NAME"
 echo
 
 echo "== STEP 1: git status =="
@@ -39,20 +42,32 @@ echo "== STEP 3: alembic upgrade head =="
 alembic upgrade head
 echo
 
-echo "== STEP 4: restart service =="
-sudo systemctl restart "$SERVICE_NAME"
+echo "== STEP 4: restart bot service =="
+sudo systemctl restart "$BOT_SERVICE_NAME"
 echo
 
-echo "== STEP 5: service status =="
-systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,20p'
+echo "== STEP 5: restart webhook service =="
+sudo systemctl restart "$WEBHOOK_SERVICE_NAME"
 echo
 
-echo "== STEP 6: current revision =="
+echo "== STEP 6: bot service status =="
+systemctl --no-pager --full status "$BOT_SERVICE_NAME" | sed -n '1,20p'
+echo
+
+echo "== STEP 7: webhook service status =="
+systemctl --no-pager --full status "$WEBHOOK_SERVICE_NAME" | sed -n '1,20p'
+echo
+
+echo "== STEP 8: current revision =="
 alembic current
 echo
 
-echo "== STEP 7: recent logs =="
-journalctl -u "$SERVICE_NAME" -n 50 --no-pager
+echo "== STEP 9: recent bot logs =="
+journalctl -u "$BOT_SERVICE_NAME" -n 30 --no-pager
+echo
+
+echo "== STEP 10: recent webhook logs =="
+journalctl -u "$WEBHOOK_SERVICE_NAME" -n 30 --no-pager
 echo
 
 echo "== RELEASE DONE =="
