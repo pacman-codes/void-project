@@ -2,111 +2,94 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="$PROJECT_DIR/.env"
-BOT_SERVICE_NAME=voidbot
-WEBHOOK_SERVICE_NAME=voidbot-webhook
+ENV_FILE="${ENV_FILE:-$PROJECT_DIR/.env}"
+VENV_ACTIVATE="$PROJECT_DIR/venv/bin/activate"
 
-# Функция для вывода в лог
-log() {
-  echo "[INFO] $1"
-}
+BOT_SERVICE_NAME="${BOT_SERVICE_NAME:-voidbot}"
+WEBHOOK_SERVICE_NAME="${WEBHOOK_SERVICE_NAME:-voidbot-webhook}"
 
-# Шаг 1: проверка git-состояния
-git_status() {
-  git_status_output=$(git status --short)
-  if [[ -n "$git_status_output" ]]; then
-    echo "Git tree is not clean. Please commit your changes or reset."
-    exit 1
-  fi
-  log "Git status: Clean"
-}
-
-# Шаг 2: git pull
-git_pull() {
-  log "Pulling latest changes from remote..."
-  git pull
-  log "Git pull complete."
-}
-
-# Шаг 3: alembic upgrade
-alembic_upgrade() {
-  log "Running alembic migrations..."
-  alembic upgrade head
-  log "Alembic upgrade complete."
-}
-
-# Шаг 4: перезапуск бота
-restart_bot_service() {
-  log "Restarting bot service..."
-  sudo systemctl restart "$BOT_SERVICE_NAME"
-  log "Bot service restarted."
-}
-
-# Шаг 5: перезапуск webhook сервиса
-restart_webhook_service() {
-  log "Restarting webhook service..."
-  sudo systemctl restart "$WEBHOOK_SERVICE_NAME"
-  log "Webhook service restarted."
-}
-
-# Шаг 6: статус бота
-status_bot_service() {
-  log "Checking bot service status..."
-  systemctl status "$BOT_SERVICE_NAME"
-}
-
-# Шаг 7: статус webhook сервиса
-status_webhook_service() {
-  log "Checking webhook service status..."
-  systemctl status "$WEBHOOK_SERVICE_NAME"
-}
-
-# Шаг 8: проверка текущей версии alembic
-check_alembic_version() {
-  log "Checking alembic version..."
-  alembic current
-}
-
-# Шаг 9: последние логи бота
-recent_bot_logs() {
-  log "Fetching recent bot logs..."
-  journalctl -u "$BOT_SERVICE_NAME" -n 10
-}
-
-# Шаг 10: последние логи webhook
-recent_webhook_logs() {
-  log "Fetching recent webhook logs..."
-  journalctl -u "$WEBHOOK_SERVICE_NAME" -n 10
-}
-
-# Основной процесс
-release() {
-  log "== RELEASE START =="
-
-  log "PROJECT_DIR=$PROJECT_DIR"
-  log "ENV_FILE=$ENV_FILE"
-  log "BOT_SERVICE_NAME=$BOT_SERVICE_NAME"
-  log "WEBHOOK_SERVICE_NAME=$WEBHOOK_SERVICE_NAME"
-
-  git_status
-  git_pull
-  alembic_upgrade
-  restart_bot_service
-  restart_webhook_service
-  status_bot_service
-  status_webhook_service
-  check_alembic_version
-  recent_bot_logs
-  recent_webhook_logs
-
-  log "== RELEASE DONE =="
-}
-
-# Условие для --dry-run
+DRY_RUN=false
 if [[ "${1:-}" == "--dry-run" ]]; then
-  log "Dry run mode: Skipping actual operations."
+  DRY_RUN=true
+fi
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "ERROR: env file not found: $ENV_FILE"
+  exit 1
+fi
+
+if [[ ! -f "$VENV_ACTIVATE" ]]; then
+  echo "ERROR: venv activate script not found at $VENV_ACTIVATE"
+  exit 1
+fi
+
+cd "$PROJECT_DIR"
+source "$VENV_ACTIVATE"
+export $(grep -v '^#' "$ENV_FILE" | xargs)
+
+echo "== RELEASE START =="
+echo "PROJECT_DIR=$PROJECT_DIR"
+echo "ENV_FILE=$ENV_FILE"
+echo "BOT_SERVICE_NAME=$BOT_SERVICE_NAME"
+echo "WEBHOOK_SERVICE_NAME=$WEBHOOK_SERVICE_NAME"
+echo "DRY_RUN=$DRY_RUN"
+echo
+
+echo "== STEP 1: git status =="
+git status --short
+echo
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "== DRY RUN =="
+  echo "Would run:"
+  echo "  git pull"
+  echo "  alembic upgrade head"
+  echo "  sudo systemctl restart $BOT_SERVICE_NAME"
+  echo "  sudo systemctl restart $WEBHOOK_SERVICE_NAME"
+  echo "  systemctl --no-pager --full status $BOT_SERVICE_NAME | sed -n '1,20p'"
+  echo "  systemctl --no-pager --full status $WEBHOOK_SERVICE_NAME | sed -n '1,20p'"
+  echo "  alembic current"
+  echo "  journalctl -u $BOT_SERVICE_NAME -n 30 --no-pager"
+  echo "  journalctl -u $WEBHOOK_SERVICE_NAME -n 30 --no-pager"
+  echo
+  echo "== RELEASE DRY RUN DONE =="
   exit 0
 fi
 
-# Запуск
-release
+echo "== STEP 2: git pull =="
+git pull
+echo
+
+echo "== STEP 3: alembic upgrade head =="
+alembic upgrade head
+echo
+
+echo "== STEP 4: restart bot service =="
+sudo systemctl restart "$BOT_SERVICE_NAME"
+echo
+
+echo "== STEP 5: restart webhook service =="
+sudo systemctl restart "$WEBHOOK_SERVICE_NAME"
+echo
+
+echo "== STEP 6: bot service status =="
+systemctl --no-pager --full status "$BOT_SERVICE_NAME" | sed -n '1,20p'
+echo
+
+echo "== STEP 7: webhook service status =="
+systemctl --no-pager --full status "$WEBHOOK_SERVICE_NAME" | sed -n '1,20p'
+echo
+
+echo "== STEP 8: current revision =="
+alembic current
+echo
+
+echo "== STEP 9: recent bot logs =="
+journalctl -u "$BOT_SERVICE_NAME" -n 30 --no-pager
+echo
+
+echo "== STEP 10: recent webhook logs =="
+journalctl -u "$WEBHOOK_SERVICE_NAME" -n 30 --no-pager
+echo
+
+echo "== RELEASE DONE =="
