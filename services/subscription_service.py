@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from db.database import async_session_maker
 from db.models import User
+from services.vpn_service import VPNService, VPNServiceError
 
 
 async def activate_paid_for_user(
@@ -43,6 +44,23 @@ async def activate_paid_for_user(
             user.promo_type = promo_code
 
         await session.commit()
+
+    try:
+        service = VPNService()
+        await service.ensure_vpn_access_record(
+            telegram_id=user_id,
+            device_number=1,
+            device_name="Устройство 1",
+        )
+        await service.ensure_vpn_access_record(
+            telegram_id=user_id,
+            device_number=2,
+            device_name="Устройство 2",
+        )
+    except VPNServiceError as e:
+        return False, str(e)
+    except Exception as e:
+        return False, f"Не удалось создать paid-ключи: {e}"
 
     return True, "OK"
 

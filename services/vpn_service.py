@@ -1,6 +1,5 @@
-import os
 import uuid
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from sqlalchemy import func, select
 
@@ -8,7 +7,6 @@ from config.config import config
 from db.database import async_session_maker
 from db.models import User, VPNAccess
 from services.panel_client import PanelClient
-
 
 from config.runtime import DEV_MODE, PANEL_ENABLED
 
@@ -26,14 +24,33 @@ class VPNService:
     def _build_fake_config_url(self, telegram_id: int, device_number: int, client_id: str) -> str:
         return (
             f"vless://{client_id}@dev.local:443"
-            f"?type=tcp&security=reality"
+            f"?type=tcp&encryption=none&security=reality"
             f"&pbk=DEV_PUBLIC_KEY"
             f"&fp=chrome"
             f"&sni=dev.local"
             f"&sid=dev{device_number}"
-            f"&headerType=none"
-            f"#user_{telegram_id}_{device_number}"
+            f"&spx=%2F"
+            f"#main-user_{telegram_id}_{device_number}"
         )
+
+    def _extract_panel_host(self) -> str:
+        raw_origin = (config.panel_origin or "").strip()
+        if not raw_origin:
+            raise VPNServiceError("PANEL_ORIGIN пустой")
+
+        origin_for_parse = raw_origin
+        if "://" not in origin_for_parse:
+            origin_for_parse = f"https://{origin_for_parse}"
+
+        parsed = urlparse(origin_for_parse)
+        host = (parsed.hostname or "").strip()
+
+        if not host:
+            raise VPNServiceError(
+                f"Не удалось определить hostname из PANEL_ORIGIN: {config.panel_origin}"
+            )
+
+        return host
 
     def _build_config_url(self, inbound: dict, client: dict) -> str:
         protocol = inbound.get("protocol", "")
@@ -86,29 +103,24 @@ class VPNService:
         if security != "reality":
             raise VPNServiceError(f"Сейчас поддерживается только security=reality, получено: {security}")
 
-        address = config.panel_origin.replace("https://", "").replace("http://", "")
-        if ":" in address:
-            address = address.split(":", 1)[0].strip("/")
-
-        if not address:
-            raise VPNServiceError("Не удалось определить адрес сервера из PANEL_ORIGIN")
+        address = self._extract_panel_host()
 
         email = client.get("email", "access")
-        tag = quote(email)
+        tag = quote(f"{self.server_name}-{email}")
 
         query_parts = [
-            f"type={quote(network)}",
-            f"security={quote(security)}",
-            f"pbk={quote(public_key)}",
-            f"fp={quote(fingerprint)}",
-            f"sni={quote(server_name)}",
+            f"type={quote(str(network))}",
+            "encryption=none",
+            f"security={quote(str(security))}",
+            f"pbk={quote(str(public_key))}",
+            f"fp={quote(str(fingerprint))}",
+            f"sni={quote(str(server_name))}",
         ]
 
         if short_id:
-            query_parts.append(f"sid={quote(short_id)}")
+            query_parts.append(f"sid={quote(str(short_id))}")
 
-        if network == "tcp":
-            query_parts.append("headerType=none")
+        query_parts.append("spx=%2F")
 
         config_url = f"vless://{client_id}@{address}:{port}?{'&'.join(query_parts)}#{tag}"
         return config_url
