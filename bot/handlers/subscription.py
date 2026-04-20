@@ -28,6 +28,7 @@ from services.payment_service import (
 )
 from services.subscription_service import activate_extra_device_for_user, activate_paid_for_user
 from services.user_service import get_user
+from services.vpn_service import VPNService, VPNServiceError
 from utils.buttons import RENEW_EN, RENEW_RU, SUBSCRIPTION_EN, SUBSCRIPTION_RU
 
 router = Router()
@@ -62,11 +63,25 @@ async def safe_callback_answer(
     text: str | None = None,
     show_alert: bool = False,
 ) -> None:
+    if text:
+        text = str(text).strip()
+        if len(text) > 180:
+            text = text[:180].rstrip() + "..."
+
     try:
         await callback.answer(text=text, show_alert=show_alert)
     except TelegramBadRequest as e:
         if "query is too old" in str(e) or "query ID is invalid" in str(e):
             return
+        if "MESSAGE_TOO_LONG" in str(e):
+            try:
+                await callback.answer(
+                    text="Ошибка. Откройте «Не работает»." if show_alert else None,
+                    show_alert=show_alert,
+                )
+                return
+            except TelegramBadRequest:
+                return
         raise
 
 
@@ -375,7 +390,20 @@ async def activate_free_for_user(user_id: int) -> tuple[bool, str]:
             user.used_devices = 0
 
         await session.commit()
-        return True, "ok"
+
+    try:
+        service = VPNService()
+        await service.ensure_vpn_access_record(
+            telegram_id=user_id,
+            device_number=1,
+            device_name="Устройство 1",
+        )
+    except VPNServiceError:
+        return False, "Не удалось создать ключ. Попробуйте ещё раз позже."
+    except Exception:
+        return False, "Не удалось создать ключ. Попробуйте ещё раз позже."
+
+    return True, "ok"
 
 
 async def send_subscription_screen(target: Message | CallbackQuery) -> None:
