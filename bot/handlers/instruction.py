@@ -79,13 +79,16 @@ async def get_primary_config_url(telegram_id: int) -> str | None:
     if config_url:
         return config_url
 
-    service = VPNService()
-    result = await service.ensure_vpn_access_record(
-        telegram_id=telegram_id,
-        device_number=1,
-        device_name="Устройство 1",
-    )
-    return result.get("config_url")
+    try:
+        service = VPNService()
+        result = await service.ensure_vpn_access_record(
+            telegram_id=telegram_id,
+            device_number=1,
+            device_name="Устройство 1",
+        )
+        return result.get("config_url")
+    except Exception:
+        return None
 
 
 @router.message(F.text.in_([INSTRUCTION_RU, INSTRUCTION_EN]))
