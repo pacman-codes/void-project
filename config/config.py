@@ -1,9 +1,17 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent.parent
+ENV_FILE = BASE_DIR / ".env"
+ENV_DEV_FILE = BASE_DIR / ".env.dev"
+
+if ENV_DEV_FILE.exists():
+    load_dotenv(ENV_DEV_FILE, override=True)
+else:
+    load_dotenv(ENV_FILE, override=True)
 
 
 def _to_bool(value: str | None, default: bool = False) -> bool:
