@@ -12,7 +12,7 @@ from bot.keyboards.user import (
 from db.database import async_session_maker
 from db.models import User, VPNAccess
 from services.user_service import get_user
-from services.vpn_service import VPNService
+from services.vpn_service import VPNService, VPNServiceError
 from utils.buttons import INSTRUCTION_EN, INSTRUCTION_RU
 
 router = Router()
@@ -87,6 +87,8 @@ async def get_primary_config_url(telegram_id: int) -> str | None:
             device_name="Устройство 1",
         )
         return result.get("config_url")
+    except VPNServiceError:
+        return None
     except Exception:
         return None
 
