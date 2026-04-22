@@ -276,7 +276,12 @@ def get_instruction_platform_inline_keyboard(
         callback_data="open_instruction",
     )
 
-    builder.adjust(1, 1)
+    builder.button(
+        text="🏠 Home" if lang == "en" else "🏠 Главная",
+        callback_data="back_home",
+    )
+
+    builder.adjust(1, 1, 1)
     return builder.as_markup()
 
 def get_support_inline_keyboard(
