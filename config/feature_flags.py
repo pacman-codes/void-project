@@ -1,5 +1,7 @@
 import os
 
+from config.config import settings  # noqa: F401
+
 
 def as_bool(value: str | None, default: bool = False) -> bool:
     if value is None:

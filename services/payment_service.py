@@ -1,5 +1,6 @@
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
+from config.feature_flags import ENABLE_LAUNCH_OFFER
 
 import httpx
 from sqlalchemy import select, text
@@ -56,6 +57,9 @@ async def get_launch_offer_used_count() -> int:
 
 
 async def is_launch_offer_available() -> bool:
+    if not ENABLE_LAUNCH_OFFER:
+        return False
+
     used_count = await get_launch_offer_used_count()
     return used_count < LAUNCH_OFFER_LIMIT
 

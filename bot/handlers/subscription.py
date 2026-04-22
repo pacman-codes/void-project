@@ -361,7 +361,8 @@ async def user_has_any_access(user_id: int) -> tuple[bool, str | None]:
 
 async def get_offer_state() -> tuple[bool, int]:
     used_count = await get_launch_offer_used_count()
-    return used_count < LAUNCH_OFFER_LIMIT, used_count
+    use_launch_offer = await is_launch_offer_available()
+    return use_launch_offer, used_count
 
 
 async def activate_free_for_user(user_id: int) -> tuple[bool, str]:
@@ -838,7 +839,9 @@ async def legal_accept(callback: CallbackQuery) -> None:
 async def choose_plan(callback: CallbackQuery) -> None:
     lang = await get_lang(callback.from_user.id)
     payment_state = await get_user_payment_state(callback.from_user.id)
-    use_launch_offer = await is_launch_offer_available()
+    from config.feature_flags import ENABLE_LAUNCH_OFFER
+
+    use_launch_offer = ENABLE_LAUNCH_OFFER and await is_launch_offer_available()
 
     if (
         payment_state.get("payment_status") == "pending"
