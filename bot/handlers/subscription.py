@@ -597,6 +597,8 @@ async def subscription_paid(callback: CallbackQuery) -> None:
 
 
 
+
+
 def build_devices_text(
     lang: str,
     access_type: str | None,
@@ -606,10 +608,7 @@ def build_devices_text(
 ) -> str:
     if access_type == "paid":
         if lang == "en":
-            header = (
-                "🔑 <b>Devices</b>\n\n"
-                f"📱 In use: <b>{used_devices} / {device_limit}</b>\n\n"
-            )
+            header = "🔑 <b>Devices</b>\n\n"
             if accesses:
                 items = []
                 for access in accesses:
@@ -621,10 +620,8 @@ def build_devices_text(
                     )
                 return header + "\n\n".join(items)
             return header + "No keys yet."
-        header = (
-            "🔑 <b>Устройства</b>\n\n"
-            f"📱 Используется: <b>{used_devices} / {device_limit}</b>\n\n"
-        )
+
+        header = "🔑 <b>Устройства</b>\n\n"
         if accesses:
             items = []
             for access in accesses:
@@ -672,7 +669,6 @@ def build_devices_text(
         "• использование без ограничений"
     )
 
-
 def build_devices_keyboard(lang: str, access_type: str | None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
@@ -707,13 +703,49 @@ async def open_add_device(callback: CallbackQuery) -> None:
         )
         user = user_result.scalar_one_or_none()
 
-        if user is None:
+    if user is None:
+        await safe_callback_answer(
+            callback,
+            "User not found" if lang == "en" else "Пользователь не найден",
+            show_alert=True,
+        )
+        return
+
+    if user.access_type == "paid":
+        vpn_service = VPNService()
+        try:
+            await vpn_service.ensure_vpn_access_record(
+                telegram_id=callback.from_user.id,
+                device_number=1,
+                device_name="Устройство 1",
+            )
+            await vpn_service.ensure_vpn_access_record(
+                telegram_id=callback.from_user.id,
+                device_number=2,
+                device_name="Устройство 2",
+            )
+        except VPNServiceError as e:
             await safe_callback_answer(
                 callback,
-                "User not found" if lang == "en" else "Пользователь не найден",
+                str(e),
                 show_alert=True,
             )
             return
+        except Exception:
+            await safe_callback_answer(
+                callback,
+                "Не удалось получить ключи. Попробуйте ещё раз позже."
+                if lang != "en"
+                else "Could not load keys. Please try again later.",
+                show_alert=True,
+            )
+            return
+
+    async with async_session_maker() as session:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        user = user_result.scalar_one_or_none()
 
         accesses_result = await session.execute(
             select(VPNAccess)
