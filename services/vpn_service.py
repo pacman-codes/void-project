@@ -128,22 +128,25 @@ class VPNService:
     async def create_vpn_user(self, telegram_id: int, device_number: int) -> dict:
         email = f"user_{telegram_id}_{device_number}"
 
-        if DEV_MODE or not PANEL_ENABLED:
-            client_id = str(uuid.uuid4())
-            fake_client = {
-                "id": client_id,
-                "email": email,
-            }
-            config_url = self._build_fake_config_url(
-                telegram_id=telegram_id,
-                device_number=device_number,
-                client_id=client_id,
-            )
-            return {
-                "created": True,
-                "client": fake_client,
-                "config_url": config_url,
-            }
+        if DEV_MODE:
+            if not PANEL_ENABLED:
+                client_id = str(uuid.uuid4())
+                fake_client = {
+                    "id": client_id,
+                    "email": email,
+                }
+                config_url = self._build_fake_config_url(
+                    telegram_id=telegram_id,
+                    device_number=device_number,
+                    client_id=client_id,
+                )
+                return {
+                    "created": True,
+                    "client": fake_client,
+                    "config_url": config_url,
+                }
+        elif not PANEL_ENABLED:
+            raise VPNServiceError("PANEL_ENABLED=False в non-DEV окружении: выдача fake key запрещена")
 
         existing_client = await self.panel_client.get_client_by_email(
             inbound_id=self.inbound_id,
