@@ -3,7 +3,7 @@ from datetime import datetime
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 
 from bot.keyboards.user import (
     CHANNEL_URL,
@@ -12,6 +12,7 @@ from bot.keyboards.user import (
     get_start_inline_keyboard,
     get_welcome_text,
 )
+from config.pricing import PARTNER_OFFER_CODE, PARTNER_OFFER_MAX_ASSIGNMENTS
 from db.database import async_session_maker
 from db.models import User, VPNAccess
 from services.access_service import get_access_status
@@ -312,12 +313,71 @@ async def render_home_screen(target: Message | CallbackQuery) -> None:
     )
 
 
+PARTNER_OFFER_LOCK_KEY = 982451653
+
+
+async def try_assign_partner_offer(telegram_id: int, start_code: str | None) -> bool:
+    if not start_code:
+        return False
+
+    start_code = start_code.strip()
+    if start_code != PARTNER_OFFER_CODE:
+        return False
+
+    async with async_session_maker() as session:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": PARTNER_OFFER_LOCK_KEY},
+        )
+
+        result = await session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if user is None:
+            return False
+
+        if user.first_paid_at is not None:
+            return False
+
+        if user.partner_offer_code == PARTNER_OFFER_CODE:
+            return True
+
+        if user.partner_offer_code:
+            return False
+
+        count_result = await session.execute(
+            select(func.count(User.id)).where(
+                User.partner_offer_code == PARTNER_OFFER_CODE
+            )
+        )
+        assigned_count = int(count_result.scalar() or 0)
+
+        if assigned_count >= PARTNER_OFFER_MAX_ASSIGNMENTS:
+            return False
+
+        user.partner_offer_code = PARTNER_OFFER_CODE
+        user.partner_offer_used = False
+        await session.commit()
+        return True
+
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     if message.from_user is None:
         return
 
     user = await ensure_user(message)
+
+    start_code = ""
+    if message.text:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) > 1:
+            start_code = parts[1].strip()
+
+    if start_code:
+        await try_assign_partner_offer(message.from_user.id, start_code)
+
     access = await get_access_status(message.from_user.id)
 
     await remove_reply_keyboard(message)

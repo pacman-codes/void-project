@@ -39,6 +39,12 @@ async def activate_paid_for_user(
         if user.used_devices is None or user.used_devices < 0:
             user.used_devices = 0
 
+        if user.first_paid_at is None:
+            user.first_paid_at = now
+
+        if user.partner_offer_code and not user.partner_offer_used:
+            user.partner_offer_used = True
+
         if promo_code:
             user.promo_applied = True
             user.promo_type = promo_code

@@ -36,6 +36,9 @@ class User(Base):
 
     promo_applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     promo_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    partner_offer_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    partner_offer_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    first_paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     device_limit: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     used_devices: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

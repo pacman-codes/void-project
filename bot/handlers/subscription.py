@@ -11,6 +11,12 @@ from bot.keyboards.user import (
     get_extra_device_offer_keyboard,
     get_tariff_inline_keyboard,
 )
+from config.links import OFFER_URL, PRIVACY_URL, RULES_URL
+from config.pricing import (
+    PARTNER_OFFER_CODE,
+    PARTNER_OFFER_PRICE_1M_RUB,
+    PARTNER_OFFER_PRICE_6M_RUB,
+)
 from db.database import async_session_maker
 from db.models import User, VPNAccess
 from services.access_service import get_access_status
@@ -33,7 +39,6 @@ from utils.buttons import RENEW_EN, RENEW_RU, SUBSCRIPTION_EN, SUBSCRIPTION_RU
 
 router = Router()
 
-from config.links import OFFER_URL, PRIVACY_URL, RULES_URL
 DEFAULT_TRAFFIC_LIMIT_MB = 3072
 
 
@@ -153,12 +158,36 @@ def format_price(amount: Decimal) -> str:
     return f"{int(amount)} ₽"
 
 
-def build_tariffs_text(lang: str, use_launch_offer: bool, used_count: int) -> str:
-    month_price = format_price(get_plan_amount("plan_1m", use_launch_offer))
-    half_year_price = format_price(get_plan_amount("plan_6m", use_launch_offer))
+def build_tariffs_text(
+    lang: str,
+    use_launch_offer: bool,
+    used_count: int,
+    use_partner_offer: bool = False,
+) -> str:
+    month_price = (
+        format_price(Decimal(str(PARTNER_OFFER_PRICE_1M_RUB)))
+        if use_partner_offer
+        else format_price(get_plan_amount("plan_1m", use_launch_offer))
+    )
+    half_year_price = (
+        format_price(Decimal(str(PARTNER_OFFER_PRICE_6M_RUB)))
+        if use_partner_offer
+        else format_price(get_plan_amount("plan_6m", use_launch_offer))
+    )
     year_price = format_price(get_plan_amount("plan_12m", use_launch_offer))
 
-    if use_launch_offer:
+    if use_partner_offer:
+        if lang == "en":
+            promo_block = (
+                "✨ <b>Special offer</b>\n"
+                "Available only for your first paid purchase\n\n"
+            )
+        else:
+            promo_block = (
+                "✨ <b>Специальное предложение</b>\n"
+                "Доступно только для первой paid-оплаты\n\n"
+            )
+    elif use_launch_offer:
         left_slots = max(LAUNCH_OFFER_LIMIT - used_count, 0)
         if lang == "en":
             promo_block = (
@@ -220,8 +249,19 @@ def build_tariffs_keyboard(lang: str, source: str = "subscription") -> InlineKey
     return builder.as_markup()
 
 
-def get_plan_meta(plan_code: str, lang: str, use_launch_offer: bool) -> tuple[str, str, Decimal]:
-    amount = get_plan_amount(plan_code, use_launch_offer)
+def get_plan_meta(
+    plan_code: str,
+    lang: str,
+    use_launch_offer: bool,
+    use_partner_offer: bool = False,
+) -> tuple[str, str, Decimal]:
+    if use_partner_offer and plan_code == "plan_1m":
+        amount = Decimal(str(PARTNER_OFFER_PRICE_1M_RUB))
+    elif use_partner_offer and plan_code == "plan_6m":
+        amount = Decimal(str(PARTNER_OFFER_PRICE_6M_RUB))
+    else:
+        amount = get_plan_amount(plan_code, use_launch_offer)
+
     price = format_price(amount)
 
     if lang == "en":
@@ -254,8 +294,13 @@ def build_open_payment_url_keyboard(lang: str, payment_url: str) -> InlineKeyboa
     return builder.as_markup()
 
 
-def build_payment_text(plan_code: str, lang: str, use_launch_offer: bool) -> str:
-    title, price, _amount = get_plan_meta(plan_code, lang, use_launch_offer)
+def build_payment_text(
+    plan_code: str,
+    lang: str,
+    use_launch_offer: bool,
+    use_partner_offer: bool = False,
+) -> str:
+    title, price, _amount = get_plan_meta(plan_code, lang, use_launch_offer, use_partner_offer)
 
     if lang == "en":
         return (
@@ -279,8 +324,14 @@ def build_payment_text(plan_code: str, lang: str, use_launch_offer: bool) -> str
     )
 
 
-def build_pending_payment_text(plan_code: str, lang: str, payment_id: str, use_launch_offer: bool) -> str:
-    title, price, _amount = get_plan_meta(plan_code, lang, use_launch_offer)
+def build_pending_payment_text(
+    plan_code: str,
+    lang: str,
+    payment_id: str,
+    use_launch_offer: bool,
+    use_partner_offer: bool = False,
+) -> str:
+    title, price, _amount = get_plan_meta(plan_code, lang, use_launch_offer, use_partner_offer)
 
     if lang == "en":
         return (
@@ -365,6 +416,23 @@ async def get_offer_state() -> tuple[bool, int]:
     return use_launch_offer, used_count
 
 
+async def get_partner_offer_state(user_id: int) -> bool:
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(User).where(User.telegram_id == user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if user is None:
+            return False
+
+        return bool(
+            user.partner_offer_code == PARTNER_OFFER_CODE
+            and not user.partner_offer_used
+            and user.first_paid_at is None
+        )
+
+
 async def activate_free_for_user(user_id: int) -> tuple[bool, str]:
     async with async_session_maker() as session:
         result = await session.execute(
@@ -445,8 +513,9 @@ async def subscription_menu(message: Message) -> None:
         if access_type == "free":
             lang = await get_lang(message.from_user.id)
             use_launch_offer, used_count = await get_offer_state()
+            use_partner_offer = await get_partner_offer_state(message.from_user.id)
             await message.answer(
-                text=build_tariffs_text(lang, use_launch_offer, used_count),
+                text=build_tariffs_text(lang, use_launch_offer, used_count, use_partner_offer),
                 reply_markup=build_tariffs_keyboard(lang, source="renew"),
                 parse_mode="HTML",
             )
@@ -463,8 +532,9 @@ async def subscription_menu(message: Message) -> None:
 async def renew_menu(message: Message) -> None:
     lang = await get_lang(message.from_user.id)
     use_launch_offer, used_count = await get_offer_state()
+    use_partner_offer = await get_partner_offer_state(message.from_user.id)
     await message.answer(
-        text=build_tariffs_text(lang, use_launch_offer, used_count),
+        text=build_tariffs_text(lang, use_launch_offer, used_count, use_partner_offer),
         reply_markup=build_tariffs_keyboard(lang, source="renew"),
         parse_mode="HTML",
     )
@@ -478,9 +548,10 @@ async def open_subscription(callback: CallbackQuery) -> None:
         if access_type == "free":
             lang = await get_lang(callback.from_user.id)
             use_launch_offer, used_count = await get_offer_state()
+            use_partner_offer = await get_partner_offer_state(callback.from_user.id)
             await safe_edit_text(
                 callback.message,
-                text=build_tariffs_text(lang, use_launch_offer, used_count),
+                text=build_tariffs_text(lang, use_launch_offer, used_count, use_partner_offer),
                 reply_markup=build_tariffs_keyboard(lang, source="renew"),
                 parse_mode="HTML",
             )
@@ -500,9 +571,10 @@ async def open_subscription(callback: CallbackQuery) -> None:
 async def open_renew(callback: CallbackQuery) -> None:
     lang = await get_lang(callback.from_user.id)
     use_launch_offer, used_count = await get_offer_state()
+    use_partner_offer = await get_partner_offer_state(callback.from_user.id)
     await safe_edit_text(
         callback.message,
-        text=build_tariffs_text(lang, use_launch_offer, used_count),
+        text=build_tariffs_text(lang, use_launch_offer, used_count, use_partner_offer),
         reply_markup=build_tariffs_keyboard(lang, source="renew"),
         parse_mode="HTML",
     )
@@ -517,9 +589,10 @@ async def back_to_subscription(callback: CallbackQuery) -> None:
         if access_type == "free":
             lang = await get_lang(callback.from_user.id)
             use_launch_offer, used_count = await get_offer_state()
+            use_partner_offer = await get_partner_offer_state(callback.from_user.id)
             await safe_edit_text(
                 callback.message,
-                text=build_tariffs_text(lang, use_launch_offer, used_count),
+                text=build_tariffs_text(lang, use_launch_offer, used_count, use_partner_offer),
                 reply_markup=build_tariffs_keyboard(lang, source="renew"),
                 parse_mode="HTML",
             )
@@ -543,9 +616,10 @@ async def back_from_legal(callback: CallbackQuery) -> None:
         if access_type == "free":
             lang = await get_lang(callback.from_user.id)
             use_launch_offer, used_count = await get_offer_state()
+            use_partner_offer = await get_partner_offer_state(callback.from_user.id)
             await safe_edit_text(
                 callback.message,
-                text=build_tariffs_text(lang, use_launch_offer, used_count),
+                text=build_tariffs_text(lang, use_launch_offer, used_count, use_partner_offer),
                 reply_markup=build_tariffs_keyboard(lang, source="renew"),
                 parse_mode="HTML",
             )
@@ -587,17 +661,15 @@ async def subscription_paid(callback: CallbackQuery) -> None:
 
     lang = await get_lang(callback.from_user.id)
     use_launch_offer, used_count = await get_offer_state()
+    use_partner_offer = await get_partner_offer_state(callback.from_user.id)
 
     await safe_edit_text(
         callback.message,
-        text=build_tariffs_text(lang, use_launch_offer, used_count),
+        text=build_tariffs_text(lang, use_launch_offer, used_count, use_partner_offer),
         reply_markup=build_tariffs_keyboard(lang, source="subscription"),
         parse_mode="HTML",
     )
     await safe_callback_answer(callback)
-
-
-
 
 
 def build_devices_text(
@@ -669,6 +741,7 @@ def build_devices_text(
         "• максимальную скорость\n"
         "• использование без ограничений"
     )
+
 
 def build_devices_keyboard(lang: str, access_type: str | None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -771,6 +844,7 @@ async def open_add_device(callback: CallbackQuery) -> None:
     )
     await safe_callback_answer(callback)
 
+
 @router.callback_query(F.data == "open_extra_device_offer")
 async def open_extra_device_offer(callback: CallbackQuery) -> None:
     lang = await get_lang(callback.from_user.id)
@@ -826,9 +900,10 @@ async def legal_accept(callback: CallbackQuery) -> None:
         return
 
     use_launch_offer, used_count = await get_offer_state()
+    use_partner_offer = await get_partner_offer_state(callback.from_user.id)
     await safe_edit_text(
         callback.message,
-        text=build_tariffs_text(lang, use_launch_offer, used_count),
+        text=build_tariffs_text(lang, use_launch_offer, used_count, use_partner_offer),
         reply_markup=build_tariffs_keyboard(lang, source="subscription"),
         parse_mode="HTML",
     )
@@ -842,6 +917,7 @@ async def choose_plan(callback: CallbackQuery) -> None:
     from config.feature_flags import ENABLE_LAUNCH_OFFER
 
     use_launch_offer = ENABLE_LAUNCH_OFFER and await is_launch_offer_available()
+    use_partner_offer = await get_partner_offer_state(callback.from_user.id)
 
     if (
         payment_state.get("payment_status") == "pending"
@@ -857,6 +933,7 @@ async def choose_plan(callback: CallbackQuery) -> None:
                 lang,
                 payment_state["payment_id"],
                 use_launch_offer,
+                use_partner_offer,
             ),
             reply_markup=build_open_payment_url_keyboard(
                 lang,
@@ -869,7 +946,7 @@ async def choose_plan(callback: CallbackQuery) -> None:
 
     await safe_edit_text(
         callback.message,
-        text=build_payment_text(callback.data, lang, use_launch_offer),
+        text=build_payment_text(callback.data, lang, use_launch_offer, use_partner_offer),
         reply_markup=build_payment_keyboard_local(lang, callback.data),
         parse_mode="HTML",
     )
@@ -895,7 +972,8 @@ async def create_pending_payment(callback: CallbackQuery) -> None:
     lang = await get_lang(callback.from_user.id)
     plan_code = callback.data.replace("pay_", "", 1)
     use_launch_offer = await is_launch_offer_available()
-    title, _price, amount = get_plan_meta(plan_code, lang, use_launch_offer)
+    use_partner_offer = await get_partner_offer_state(callback.from_user.id)
+    title, _price, amount = get_plan_meta(plan_code, lang, use_launch_offer, use_partner_offer)
 
     try:
         result = await create_redirect_payment(
@@ -912,7 +990,13 @@ async def create_pending_payment(callback: CallbackQuery) -> None:
 
     await safe_edit_text(
         callback.message,
-        text=build_pending_payment_text(plan_code, lang, result["payment_id"], use_launch_offer),
+        text=build_pending_payment_text(
+            plan_code,
+            lang,
+            result["payment_id"],
+            use_launch_offer,
+            use_partner_offer,
+        ),
         reply_markup=build_open_payment_url_keyboard(
             lang,
             result["payment_confirmation_url"],
@@ -1016,9 +1100,16 @@ async def payment_check(callback: CallbackQuery) -> None:
         return
 
     use_launch_offer = await is_launch_offer_available()
+    use_partner_offer = await get_partner_offer_state(callback.from_user.id)
     await safe_edit_text(
         callback.message,
-        text=build_pending_payment_text(plan_code, lang, payment_state["payment_id"], use_launch_offer),
+        text=build_pending_payment_text(
+            plan_code,
+            lang,
+            payment_state["payment_id"],
+            use_launch_offer,
+            use_partner_offer,
+        ),
         reply_markup=build_open_payment_url_keyboard(
             lang,
             payment_state["payment_confirmation_url"],
