@@ -129,6 +129,12 @@ async def ensure_fake_key(telegram_id: int, username: str | None, device_number:
         if existing is not None:
             return existing.config_url or "config_url not found"
 
+        device_limit = int(user.device_limit or 1)
+        if device_number > device_limit:
+            raise ValueError(
+                f"Device limit exceeded: device_number={device_number}, device_limit={device_limit}"
+            )
+
         client_uuid = str(uuid4())
         config_url = make_fake_config(telegram_id, device_number, client_uuid)
 
