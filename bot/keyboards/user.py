@@ -330,6 +330,27 @@ def get_support_inline_keyboard(
 
 
 
+
+def get_after_regenerate_key_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+
+    builder.button(
+        text="🔑 Devices" if lang == "en" else "🔑 Устройства",
+        callback_data="open_add_device",
+        style="primary",
+    )
+    builder.button(
+        text="📘 Instruction" if lang == "en" else "📘 Инструкция",
+        callback_data="open_instruction",
+    )
+    builder.button(
+        text="🏠 Home" if lang == "en" else "🏠 Главная",
+        callback_data="back_home",
+    )
+
+    builder.adjust(1, 1, 1)
+    return builder.as_markup()
+
 def get_confirm_regenerate_key_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 

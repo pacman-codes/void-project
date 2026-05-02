@@ -2,6 +2,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 
 from bot.keyboards.user import (
+    get_after_regenerate_key_keyboard,
     get_confirm_regenerate_key_keyboard,
     get_support_inline_keyboard,
 )
@@ -160,7 +161,7 @@ async def confirm_regenerate_key(callback: CallbackQuery) -> None:
 
     await callback.message.edit_text(
         build_regenerated_key_text(lang, result["config_url"]),
-        reply_markup=get_support_inline_keyboard(lang, access_type),
+        reply_markup=get_after_regenerate_key_keyboard(lang),
         parse_mode="HTML",
     )
     await callback.answer("Готово" if lang != "en" else "Done")
