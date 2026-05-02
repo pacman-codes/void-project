@@ -304,6 +304,11 @@ def get_support_inline_keyboard(
         )
 
     builder.button(
+        text="🔄 Refresh key" if lang == "en" else "🔄 Обновить ключ",
+        callback_data="regenerate_key",
+        style="primary",
+    )
+    builder.button(
         text="📘 Instruction" if lang == "en" else "📘 Инструкция",
         callback_data="open_instruction",
     )
@@ -317,9 +322,9 @@ def get_support_inline_keyboard(
     )
 
     if _is_paid(access_type):
-        builder.adjust(1, 1, 2, 1)
+        builder.adjust(1, 1, 1, 2, 1)
     else:
-        builder.adjust(1, 2, 1)
+        builder.adjust(1, 1, 2, 1)
 
     return builder.as_markup()
 

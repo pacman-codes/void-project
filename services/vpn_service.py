@@ -17,9 +17,14 @@ class VPNServiceError(Exception):
 
 class VPNService:
     def __init__(self) -> None:
-        self.panel_client = PanelClient()
+        self.panel_client: PanelClient | None = None
         self.inbound_id = 8
         self.server_name = "main"
+
+    def _get_panel_client(self) -> PanelClient:
+        if self.panel_client is None:
+            self.panel_client = PanelClient()
+        return self.panel_client
 
     def _build_fake_config_url(self, telegram_id: int, device_number: int, client_id: str) -> str:
         return (
@@ -125,8 +130,13 @@ class VPNService:
         config_url = f"vless://{client_id}@{address}:{port}?{'&'.join(query_parts)}#{tag}"
         return config_url
 
-    async def create_vpn_user(self, telegram_id: int, device_number: int) -> dict:
-        email = f"user_{telegram_id}_{device_number}"
+    async def create_vpn_user(
+        self,
+        telegram_id: int,
+        device_number: int,
+        email: str | None = None,
+    ) -> dict:
+        email = email or f"user_{telegram_id}_{device_number}"
 
         if DEV_MODE:
             if not PANEL_ENABLED:
@@ -148,13 +158,13 @@ class VPNService:
         elif not PANEL_ENABLED:
             raise VPNServiceError("PANEL_ENABLED=False в non-DEV окружении: выдача fake key запрещена")
 
-        existing_client = await self.panel_client.get_client_by_email(
+        existing_client = await self._get_panel_client().get_client_by_email(
             inbound_id=self.inbound_id,
             email=email,
         )
 
         if existing_client is not None:
-            inbound = await self.panel_client.get_inbound(self.inbound_id)
+            inbound = await self._get_panel_client().get_inbound(self.inbound_id)
             config_url = self._build_config_url(inbound, existing_client)
 
             return {
@@ -163,7 +173,7 @@ class VPNService:
                 "config_url": config_url,
             }
 
-        created_result = await self.panel_client.add_client(
+        created_result = await self._get_panel_client().add_client(
             inbound_id=self.inbound_id,
             client_id=str(uuid.uuid4()),
             email=email,
@@ -180,7 +190,7 @@ class VPNService:
         if client is None:
             raise VPNServiceError("Клиент был создан, но не вернулся из panel_client")
 
-        inbound = await self.panel_client.get_inbound(self.inbound_id)
+        inbound = await self._get_panel_client().get_inbound(self.inbound_id)
         config_url = self._build_config_url(inbound, client)
 
         return {
@@ -204,8 +214,13 @@ class VPNService:
         user: User,
         device_number: int,
         device_name: str | None = None,
+        email: str | None = None,
     ) -> dict:
-        panel_result = await self.create_vpn_user(user.telegram_id, device_number)
+        panel_result = await self.create_vpn_user(
+            user.telegram_id,
+            device_number,
+            email=email,
+        )
         client = panel_result["client"]
         config_url = panel_result["config_url"]
 
@@ -330,6 +345,66 @@ class VPNService:
             return {
                 "user_id": user.id,
                 "device_number": next_device_number,
+                "device_limit": user.device_limit,
+                "used_devices": user.used_devices,
+                "external_id": slot_result["external_id"],
+                "client_uuid": slot_result["client_uuid"],
+                "config_url": slot_result["config_url"],
+                "created_in_panel": slot_result["created_in_panel"],
+                "is_active": True,
+            }
+
+    async def regenerate_vpn_access_record(
+        self,
+        telegram_id: int,
+        device_number: int = 1,
+        device_name: str | None = None,
+    ) -> dict:
+        async with async_session_maker() as session:
+            user_result = await session.execute(
+                select(User).where(User.telegram_id == telegram_id)
+            )
+            user = user_result.scalar_one_or_none()
+
+            if user is None:
+                raise VPNServiceError(f"Пользователь с telegram_id={telegram_id} не найден в БД")
+
+            if user.device_limit is None or user.device_limit <= 0:
+                user.device_limit = 1
+
+            if device_number > user.device_limit:
+                raise VPNServiceError("Лимит устройств для этого тарифа исчерпан")
+
+            access_result = await session.execute(
+                select(VPNAccess).where(
+                    VPNAccess.user_id == user.id,
+                    VPNAccess.device_number == device_number,
+                )
+            )
+            access = access_result.scalar_one_or_none()
+
+            if access is not None:
+                await session.delete(access)
+                await session.flush()
+
+            unique_email = f"user_{telegram_id}_{device_number}_regen_{uuid.uuid4().hex[:8]}"
+
+            slot_result = await self._ensure_slot_record(
+                session=session,
+                user=user,
+                device_number=device_number,
+                device_name=device_name or f"Устройство {device_number}",
+                email=unique_email,
+            )
+
+            actual_used_devices = await self._count_user_devices(session, user.id)
+            user.used_devices = max(user.used_devices or 0, actual_used_devices)
+
+            await session.commit()
+
+            return {
+                "user_id": user.id,
+                "device_number": device_number,
                 "device_limit": user.device_limit,
                 "used_devices": user.used_devices,
                 "external_id": slot_result["external_id"],
