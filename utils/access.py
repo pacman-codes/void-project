@@ -31,9 +31,12 @@ async def _send_reply(event: TelegramEvent, text: str) -> None:
         return
 
     if isinstance(event, CallbackQuery):
-        if event.message:
+        if isinstance(event.message, Message):
             await event.message.answer(text)
-        await event.answer()
+            await event.answer()
+            return
+
+        await event.answer(text, show_alert=True)
 
 
 async def ensure_active_access(

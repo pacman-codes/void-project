@@ -24,3 +24,39 @@ texts = {
         "buy": "Subscription activated successfully ✅",
     },
 }
+
+
+def get_text(lang: str, key: str, default: str | None = None) -> str:
+    lang = lang if lang in texts else "ru"
+    value = texts.get(lang, {}).get(key)
+
+    if value is not None:
+        return value
+
+    if default is not None:
+        return default
+
+    return key
+
+
+def get_access_denied_text(lang: str, reason: str | None = None) -> str:
+    if lang == "en":
+        if reason == "traffic_limit":
+            return "Traffic limit has been reached. Upgrade to full access to continue."
+        if reason == "expired":
+            return "Access has expired. Renew access to continue."
+        if reason == "device_limit":
+            return "Device limit has been reached."
+        if reason == "no_access":
+            return "Access is not active. Choose a plan to continue."
+        return "Access is not available."
+
+    if reason == "traffic_limit":
+        return "Лимит трафика исчерпан. Перейдите на полный доступ, чтобы продолжить."
+    if reason == "expired":
+        return "Доступ истёк. Продлите доступ, чтобы продолжить."
+    if reason == "device_limit":
+        return "Лимит устройств исчерпан."
+    if reason == "no_access":
+        return "Доступ не активен. Выберите тариф, чтобы продолжить."
+    return "Доступ недоступен."
