@@ -5,7 +5,7 @@ from bot.keyboards.user import get_support_inline_keyboard
 from config.support import SUPPORT_USERNAME
 from services.access_service import get_access_status
 from services.user_service import get_user
-from services.vpn_service import VPNService, VPNServiceError
+from services.vpn_service import VPNService
 from utils.buttons import SUPPORT_EN, SUPPORT_RU
 
 router = Router()
@@ -110,7 +110,7 @@ async def regenerate_key(callback: CallbackQuery) -> None:
             device_number=1,
             device_name="Устройство 1",
         )
-    except VPNServiceError:
+    except Exception:
         await callback.message.edit_text(
             build_regenerate_error_text(lang),
             reply_markup=get_support_inline_keyboard(lang, access_type),
