@@ -112,23 +112,9 @@ async def open_support(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "regenerate_key")
 async def open_regenerate_key_confirm(callback: CallbackQuery) -> None:
-    lang = await get_lang(callback.from_user.id)
-    access = await get_access_status(callback.from_user.id)
+    from bot.handlers.subscription_parts.devices import open_add_device
 
-    access_type = access.get("access_type")
-    if access_type not in {"free", "paid"}:
-        await callback.answer(
-            "Access is not active" if lang == "en" else "Доступ не активен",
-            show_alert=True,
-        )
-        return
-
-    await callback.message.edit_text(
-        build_regenerate_confirm_text(lang),
-        reply_markup=get_confirm_regenerate_key_keyboard(lang),
-        parse_mode="HTML",
-    )
-    await callback.answer()
+    await open_add_device(callback)
 
 
 @router.callback_query(F.data == "confirm_regenerate_key")
