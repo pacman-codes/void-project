@@ -786,18 +786,30 @@ async def open_add_device(callback: CallbackQuery) -> None:
         return
 
     if user.access_type == "paid":
+        async with async_session_maker() as session:
+            existing_result = await session.execute(
+                select(VPNAccess.device_number).where(
+                    VPNAccess.user_id == user.id,
+                    VPNAccess.is_active.is_(True),
+                )
+            )
+            existing_device_numbers = set(existing_result.scalars().all())
+
         vpn_service = VPNService()
         try:
-            await vpn_service.ensure_vpn_access_record(
-                telegram_id=callback.from_user.id,
-                device_number=1,
-                device_name="Устройство 1",
-            )
-            await vpn_service.ensure_vpn_access_record(
-                telegram_id=callback.from_user.id,
-                device_number=2,
-                device_name="Устройство 2",
-            )
+            if 1 not in existing_device_numbers:
+                await vpn_service.ensure_vpn_access_record(
+                    telegram_id=callback.from_user.id,
+                    device_number=1,
+                    device_name="Устройство 1",
+                )
+
+            if 2 not in existing_device_numbers and (user.device_limit or 1) >= 2:
+                await vpn_service.ensure_vpn_access_record(
+                    telegram_id=callback.from_user.id,
+                    device_number=2,
+                    device_name="Устройство 2",
+                )
         except VPNServiceError as e:
             await safe_callback_answer(
                 callback,
