@@ -329,6 +329,23 @@ def get_support_inline_keyboard(
     return builder.as_markup()
 
 
+
+def get_confirm_regenerate_key_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+
+    builder.button(
+        text="✅ Yes, refresh key" if lang == "en" else "✅ Да, обновить ключ",
+        callback_data="confirm_regenerate_key",
+        style="danger",
+    )
+    builder.button(
+        text="⬅️ Back" if lang == "en" else "⬅️ Назад",
+        callback_data="open_support",
+    )
+
+    builder.adjust(1, 1)
+    return builder.as_markup()
+
 def get_access_inline_keyboard(
     lang: str | None = None,
     access_type: str | None = None,

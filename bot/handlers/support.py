@@ -1,7 +1,10 @@
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 
-from bot.keyboards.user import get_support_inline_keyboard
+from bot.keyboards.user import (
+    get_confirm_regenerate_key_keyboard,
+    get_support_inline_keyboard,
+)
 from config.support import SUPPORT_USERNAME
 from services.access_service import get_access_status
 from services.user_service import get_user
@@ -26,18 +29,33 @@ def build_support_text(lang: str) -> str:
     )
 
 
+def build_regenerate_confirm_text(lang: str) -> str:
+    if lang == "en":
+        return (
+            "⚠️ <b>Refresh key?</b>\n\n"
+            "The old key will stop working.\n"
+            "After refreshing, you will need to import the new key into the app again."
+        )
+
+    return (
+        "⚠️ <b>Обновить ключ?</b>\n\n"
+        "Старый ключ перестанет работать.\n"
+        "После обновления новый ключ нужно будет заново импортировать в приложение."
+    )
+
+
 def build_regenerated_key_text(lang: str, config_url: str) -> str:
     if lang == "en":
         return (
             "✅ <b>Key refreshed</b>\n\n"
-            "Old key in the bot was replaced with a new one.\n"
+            "Old key was disabled and replaced with a new one.\n"
             "Import this key into your app:\n\n"
             f"<code>{config_url}</code>"
         )
 
     return (
         "✅ <b>Ключ обновлен</b>\n\n"
-        "Старый ключ в боте заменен на новый.\n"
+        "Старый ключ отключен и заменен на новый.\n"
         "Импортируйте этот ключ в приложение:\n\n"
         f"<code>{config_url}</code>"
     )
@@ -92,7 +110,28 @@ async def open_support(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "regenerate_key")
-async def regenerate_key(callback: CallbackQuery) -> None:
+async def open_regenerate_key_confirm(callback: CallbackQuery) -> None:
+    lang = await get_lang(callback.from_user.id)
+    access = await get_access_status(callback.from_user.id)
+
+    access_type = access.get("access_type")
+    if access_type not in {"free", "paid"}:
+        await callback.answer(
+            "Access is not active" if lang == "en" else "Доступ не активен",
+            show_alert=True,
+        )
+        return
+
+    await callback.message.edit_text(
+        build_regenerate_confirm_text(lang),
+        reply_markup=get_confirm_regenerate_key_keyboard(lang),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "confirm_regenerate_key")
+async def confirm_regenerate_key(callback: CallbackQuery) -> None:
     lang = await get_lang(callback.from_user.id)
     access = await get_access_status(callback.from_user.id)
 
