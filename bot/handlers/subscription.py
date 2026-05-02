@@ -743,28 +743,292 @@ def build_devices_text(
     )
 
 
-def build_devices_keyboard(lang: str, access_type: str | None) -> InlineKeyboardMarkup:
+def build_devices_keyboard(
+    lang: str,
+    access_type: str | None,
+    accesses: list[VPNAccess] | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    accesses = accesses or []
+
+    for access in accesses:
+        if not access.is_active:
+            continue
+
+        device_number = access.device_number or 1
+        if lang == "en":
+            text = f"🔄 Refresh device {device_number}"
+        else:
+            text = f"🔄 Обновить устройство {device_number}"
+
+        builder.button(
+            text=text,
+            callback_data=f"regenerate_device:{device_number}",
+            style="primary",
+        )
+
+    if accesses:
+        builder.button(
+            text="🔄 Refresh all keys" if lang == "en" else "🔄 Обновить все ключи",
+            callback_data="regenerate_all_keys",
+            style="danger",
+        )
 
     if access_type == "paid":
-        if lang == "en":
-            builder.button(text="🔑 Add device", callback_data="open_extra_device_offer", style="primary")
-            builder.button(text="🏠 Home", callback_data="back_home")
-        else:
-            builder.button(text="🔑 Добавить устройство", callback_data="open_extra_device_offer", style="primary")
-            builder.button(text="🏠 Главная", callback_data="back_home")
-        builder.adjust(1, 1)
-        return builder.as_markup()
-
-    if lang == "en":
-        builder.button(text="💎 Get full access", callback_data="open_subscription", style="success")
-        builder.button(text="🏠 Home", callback_data="back_home")
+        builder.button(
+            text="🔑 Add device" if lang == "en" else "🔑 Добавить устройство",
+            callback_data="open_extra_device_offer",
+            style="primary",
+        )
     else:
-        builder.button(text="💎 Получить полный доступ", callback_data="open_subscription", style="success")
-        builder.button(text="🏠 Главная", callback_data="back_home")
+        builder.button(
+            text="💎 Get full access" if lang == "en" else "💎 Получить полный доступ",
+            callback_data="open_subscription",
+            style="success",
+        )
+
+    builder.button(
+        text="🏠 Home" if lang == "en" else "🏠 Главная",
+        callback_data="back_home",
+    )
+
+    rows = [1 for _ in accesses if _.is_active]
+    if accesses:
+        rows.append(1)
+    rows.extend([1, 1])
+    builder.adjust(*rows)
+
+    return builder.as_markup()
+
+
+
+def build_regenerate_device_confirm_text(lang: str, device_number: int) -> str:
+    if lang == "en":
+        return (
+            f"⚠️ <b>Refresh device {device_number}?</b>\n\n"
+            "The old key for this device will stop working.\n"
+            "After refreshing, import the new key into the app again."
+        )
+
+    return (
+        f"⚠️ <b>Обновить устройство {device_number}?</b>\n\n"
+        "Старый ключ этого устройства перестанет работать.\n"
+        "После обновления новый ключ нужно будет заново импортировать в приложение."
+    )
+
+
+def build_regenerate_all_confirm_text(lang: str) -> str:
+    if lang == "en":
+        return (
+            "⚠️ <b>Refresh all keys?</b>\n\n"
+            "All old keys will stop working.\n"
+            "After refreshing, import new keys into all apps again."
+        )
+
+    return (
+        "⚠️ <b>Обновить все ключи?</b>\n\n"
+        "Все старые ключи перестанут работать.\n"
+        "После обновления новые ключи нужно будет заново импортировать во все приложения."
+    )
+
+
+def build_regenerate_device_confirm_keyboard(lang: str, device_number: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+
+    builder.button(
+        text="✅ Yes, refresh" if lang == "en" else "✅ Да, обновить",
+        callback_data=f"confirm_regenerate_device:{device_number}",
+        style="danger",
+    )
+    builder.button(
+        text="⬅️ Back" if lang == "en" else "⬅️ Назад",
+        callback_data="open_add_device",
+    )
 
     builder.adjust(1, 1)
     return builder.as_markup()
+
+
+def build_regenerate_all_confirm_keyboard(lang: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+
+    builder.button(
+        text="✅ Yes, refresh all" if lang == "en" else "✅ Да, обновить все",
+        callback_data="confirm_regenerate_all_keys",
+        style="danger",
+    )
+    builder.button(
+        text="⬅️ Back" if lang == "en" else "⬅️ Назад",
+        callback_data="open_add_device",
+    )
+
+    builder.adjust(1, 1)
+    return builder.as_markup()
+
+
+async def render_devices_screen(callback: CallbackQuery) -> None:
+    lang = await get_lang(callback.from_user.id)
+
+    async with async_session_maker() as session:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        user = user_result.scalar_one_or_none()
+
+        if user is None:
+            await safe_callback_answer(
+                callback,
+                "User not found" if lang == "en" else "Пользователь не найден",
+                show_alert=True,
+            )
+            return
+
+        accesses_result = await session.execute(
+            select(VPNAccess)
+            .where(VPNAccess.user_id == user.id, VPNAccess.is_active.is_(True))
+            .order_by(VPNAccess.device_number.asc(), VPNAccess.id.asc())
+        )
+        accesses = list(accesses_result.scalars().all())
+
+    text = build_devices_text(
+        lang=lang,
+        access_type=user.access_type,
+        device_limit=user.device_limit or 1,
+        used_devices=user.used_devices or 0,
+        accesses=accesses,
+    )
+
+    await safe_edit_text(
+        callback.message,
+        text=text,
+        reply_markup=build_devices_keyboard(lang, user.access_type, accesses),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("regenerate_device:"))
+async def open_regenerate_device_confirm(callback: CallbackQuery) -> None:
+    lang = await get_lang(callback.from_user.id)
+
+    try:
+        device_number = int(callback.data.split(":", 1)[1])
+    except Exception:
+        await safe_callback_answer(
+            callback,
+            "Invalid device" if lang == "en" else "Некорректное устройство",
+            show_alert=True,
+        )
+        return
+
+    await safe_edit_text(
+        callback.message,
+        text=build_regenerate_device_confirm_text(lang, device_number),
+        reply_markup=build_regenerate_device_confirm_keyboard(lang, device_number),
+        parse_mode="HTML",
+    )
+    await safe_callback_answer(callback)
+
+
+@router.callback_query(F.data.startswith("confirm_regenerate_device:"))
+async def confirm_regenerate_device(callback: CallbackQuery) -> None:
+    lang = await get_lang(callback.from_user.id)
+
+    try:
+        device_number = int(callback.data.split(":", 1)[1])
+    except Exception:
+        await safe_callback_answer(
+            callback,
+            "Invalid device" if lang == "en" else "Некорректное устройство",
+            show_alert=True,
+        )
+        return
+
+    try:
+        await VPNService().regenerate_vpn_access_record(
+            telegram_id=callback.from_user.id,
+            device_number=device_number,
+            device_name=f"Устройство {device_number}",
+        )
+    except Exception:
+        await safe_callback_answer(
+            callback,
+            "Could not refresh key" if lang == "en" else "Не удалось обновить ключ",
+            show_alert=True,
+        )
+        return
+
+    await render_devices_screen(callback)
+    await safe_callback_answer(callback, "Done" if lang == "en" else "Готово")
+
+
+@router.callback_query(F.data == "regenerate_all_keys")
+async def open_regenerate_all_confirm(callback: CallbackQuery) -> None:
+    lang = await get_lang(callback.from_user.id)
+
+    await safe_edit_text(
+        callback.message,
+        text=build_regenerate_all_confirm_text(lang),
+        reply_markup=build_regenerate_all_confirm_keyboard(lang),
+        parse_mode="HTML",
+    )
+    await safe_callback_answer(callback)
+
+
+@router.callback_query(F.data == "confirm_regenerate_all_keys")
+async def confirm_regenerate_all_keys(callback: CallbackQuery) -> None:
+    lang = await get_lang(callback.from_user.id)
+
+    async with async_session_maker() as session:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        user = user_result.scalar_one_or_none()
+
+        if user is None:
+            await safe_callback_answer(
+                callback,
+                "User not found" if lang == "en" else "Пользователь не найден",
+                show_alert=True,
+            )
+            return
+
+        access_result = await session.execute(
+            select(VPNAccess.device_number)
+            .where(
+                VPNAccess.user_id == user.id,
+                VPNAccess.is_active.is_(True),
+            )
+            .order_by(VPNAccess.device_number.asc())
+        )
+        device_numbers = list(access_result.scalars().all())
+
+    if not device_numbers:
+        await safe_callback_answer(
+            callback,
+            "No keys found" if lang == "en" else "Ключи не найдены",
+            show_alert=True,
+        )
+        return
+
+    service = VPNService()
+
+    try:
+        for device_number in device_numbers:
+            await service.regenerate_vpn_access_record(
+                telegram_id=callback.from_user.id,
+                device_number=int(device_number),
+                device_name=f"Устройство {device_number}",
+            )
+    except Exception:
+        await safe_callback_answer(
+            callback,
+            "Could not refresh all keys" if lang == "en" else "Не удалось обновить все ключи",
+            show_alert=True,
+        )
+        return
+
+    await render_devices_screen(callback)
+    await safe_callback_answer(callback, "Done" if lang == "en" else "Готово")
 
 
 @router.callback_query(F.data == "open_add_device")
@@ -827,33 +1091,7 @@ async def open_add_device(callback: CallbackQuery) -> None:
             )
             return
 
-    async with async_session_maker() as session:
-        user_result = await session.execute(
-            select(User).where(User.telegram_id == callback.from_user.id)
-        )
-        user = user_result.scalar_one_or_none()
-
-        accesses_result = await session.execute(
-            select(VPNAccess)
-            .where(VPNAccess.user_id == user.id, VPNAccess.is_active.is_(True))
-            .order_by(VPNAccess.device_number.asc(), VPNAccess.id.asc())
-        )
-        accesses = list(accesses_result.scalars().all())
-
-    text = build_devices_text(
-        lang=lang,
-        access_type=user.access_type,
-        device_limit=user.device_limit or 1,
-        used_devices=user.used_devices or 0,
-        accesses=accesses,
-    )
-
-    await safe_edit_text(
-        callback.message,
-        text=text,
-        reply_markup=build_devices_keyboard(lang, user.access_type),
-        parse_mode="HTML",
-    )
+    await render_devices_screen(callback)
     await safe_callback_answer(callback)
 
 
