@@ -383,6 +383,14 @@ class VPNService:
             )
             access = access_result.scalar_one_or_none()
 
+            old_client_uuid = access.client_uuid if access is not None else ""
+
+            if old_client_uuid and not DEV_MODE:
+                await self._get_panel_client().delete_client(
+                    inbound_id=self.inbound_id,
+                    client_id=old_client_uuid,
+                )
+
             if access is not None:
                 await session.delete(access)
                 await session.flush()

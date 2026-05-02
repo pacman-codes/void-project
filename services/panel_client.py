@@ -395,6 +395,41 @@ class PanelClient:
             "client": created,
         }
 
+    async def delete_client(self, inbound_id: int, client_id: str) -> dict[str, Any]:
+        if not client_id:
+            raise PanelRequestError("client_id пустой, удаление клиента невозможно")
+
+        last_error: Exception | None = None
+
+        for method in ("POST", "DELETE"):
+            client = await self.login()
+            try:
+                data = await self._request_json(
+                    client,
+                    method,
+                    f"/panel/api/inbounds/{inbound_id}/delClient/{client_id}",
+                )
+            except PanelRequestError as exc:
+                last_error = exc
+                continue
+            finally:
+                await client.aclose()
+
+            if not data.get("success"):
+                raise PanelRequestError(
+                    f"Панель вернула success=false при удалении клиента {client_id}: {data}"
+                )
+
+            return {
+                "success": True,
+                "message": data.get("msg", ""),
+                "client_id": client_id,
+            }
+
+        raise PanelRequestError(
+            f"Не удалось удалить клиента {client_id} из inbound {inbound_id}: {last_error}"
+        )
+
     async def debug_probe(self, inbound_id: int) -> dict[str, Any]:
         result: dict[str, Any] = {
             "success": False,
