@@ -123,7 +123,18 @@ async def build_subscription_by_token(token: str) -> str:
 
         await session.commit()
 
-        return "\n".join(config_urls) + "\n"
+        header_lines = [
+            "#profile-title: VOID",
+            "#subscription-auto-update-enable: 1",
+            "#subscription-auto-update-open-enable: 1",
+            "#subscription-autoconnect: 1",
+            "#subscription-autoconnect-type: lowestdelay",
+            "#subscription-ping-onopen-enabled: 1",
+            "#subscriptions-expand-now: 1",
+            "#ping-result: icon",
+        ]
+
+        return "\n".join(header_lines + config_urls) + "\n"
 
 
 def build_public_subscription_url(token: str) -> str:
