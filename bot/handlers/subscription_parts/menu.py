@@ -1,5 +1,6 @@
 from decimal import Decimal
 import asyncio
+from datetime import datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -67,30 +68,55 @@ from utils.buttons import RENEW_EN, RENEW_RU, SUBSCRIPTION_EN, SUBSCRIPTION_RU
 router = Router()
 
 
-def build_subscription_link_text(lang: str, url: str) -> str:
+def format_subscription_expiry(value, lang: str) -> str:
+    if value is None:
+        return "not set" if lang == "en" else "не указана"
+
+    if isinstance(value, datetime):
+        dt = value + timedelta(hours=3)
+        if lang == "en":
+            return dt.strftime("%d %b %Y, %H:%M (MSK)")
+        return dt.strftime("%d.%m.%Y %H:%M (МСК)")
+
+    return str(value)
+
+
+async def get_subscription_expiry_for_user(telegram_id: int):
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(User.subscription_expiry).where(User.telegram_id == telegram_id)
+        )
+        return result.scalar_one_or_none()
+
+
+def build_subscription_link_text(lang: str, url: str, expiry=None) -> str:
+    expiry_text = format_subscription_expiry(expiry, lang)
+
     if lang == "en":
         return (
-            "🔗 <b>Your personal subscription link</b>\n\n"
-            "Use this link as the main connection method. It returns your current active access parameters automatically.\n\n"
-            f"<code>{url}</code>\n\n"
-            "Old raw keys still work for now, but they will later become legacy mode."
+            f"🎉 <b>Subscription active until {expiry_text}</b>\n\n"
+            "Your connection link:\n"
+            f"<code>{url}</code>\n"
+            "(tap to copy)\n\n"
+            "⬆️ Copy this link and paste it into the app."
         )
 
     return (
-        "🔗 <b>Ваша персональная подписочная ссылка</b>\n\n"
-        "Используйте эту ссылку как основной способ подключения. Она автоматически отдаёт актуальные параметры доступа.\n\n"
-        f"<code>{url}</code>\n\n"
-        "Старые raw-ключи пока работают, но позже станут legacy-режимом."
+        f"🎉 <b>Подписка активна до {expiry_text}</b>\n\n"
+        "Твоя ссылка подключения:\n"
+        f"<code>{url}</code>\n"
+        "(нажми, чтобы скопировать)\n\n"
+        "⬆️ Скопируй эту ссылку и просто вставь в приложение."
     )
 
 
 def build_subscription_link_keyboard(lang: str, url: str) -> InlineKeyboardMarkup:
-    open_text = "Open subscription" if lang == "en" else "Открыть подписку"
-    home_text = "Home" if lang == "en" else "На главную"
+    instruction_text = "📖 Instruction" if lang == "en" else "📖 Инструкция"
+    home_text = "🏠 Home" if lang == "en" else "🏠 На главную"
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=open_text, url=url)],
+            [InlineKeyboardButton(text=instruction_text, callback_data="open_instruction")],
             [InlineKeyboardButton(text=home_text, callback_data="back_home")],
         ]
     )
@@ -157,7 +183,8 @@ async def send_subscription_link_screen(target: Message | CallbackQuery) -> None
         return
 
     url = build_public_subscription_url(link.token)
-    text = build_subscription_link_text(lang, url)
+    expiry = await get_subscription_expiry_for_user(target.from_user.id)
+    text = build_subscription_link_text(lang, url, expiry)
     keyboard = build_subscription_link_keyboard(lang, url)
 
     if isinstance(target, Message):
