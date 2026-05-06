@@ -54,6 +54,7 @@ from services.payment_service import (
     is_launch_offer_available,
     sync_payment_status,
 )
+from services.access_service import get_access_status
 from services.subscription_service import activate_extra_device_for_user, activate_paid_for_user
 from services.subscription_link_service import (
     SubscriptionLinkError,
@@ -95,8 +96,56 @@ def build_subscription_link_keyboard(lang: str, url: str) -> InlineKeyboardMarku
     )
 
 
+
+
+async def ensure_access_before_subscription_link(telegram_id: int) -> tuple[bool, str]:
+    access = await get_access_status(telegram_id)
+    access_type = access.get("access_type")
+
+    if not access.get("has_access"):
+        return False, "Доступ не активен"
+
+    try:
+        service = VPNService()
+
+        if access_type == "free":
+            await service.ensure_vpn_access_record(
+                telegram_id=telegram_id,
+                device_number=1,
+                device_name="Устройство 1",
+            )
+            return True, "OK"
+
+        if access_type == "paid":
+            await service.ensure_vpn_access_record(
+                telegram_id=telegram_id,
+                device_number=1,
+                device_name="Устройство 1",
+            )
+            await service.ensure_vpn_access_record(
+                telegram_id=telegram_id,
+                device_number=2,
+                device_name="Устройство 2",
+            )
+            return True, "OK"
+
+        return False, "Доступ не активен"
+
+    except VPNServiceError as exc:
+        return False, str(exc)
+    except Exception:
+        return False, "Не удалось подготовить подписочную ссылку"
+
 async def send_subscription_link_screen(target: Message | CallbackQuery) -> None:
     lang = await get_lang(target.from_user.id)
+
+    ok, message = await ensure_access_before_subscription_link(target.from_user.id)
+    if not ok:
+        if isinstance(target, Message):
+            await target.answer(message)
+        else:
+            await safe_callback_answer(target, message, show_alert=True)
+        return
 
     try:
         link = await get_or_create_subscription_link(target.from_user.id)
