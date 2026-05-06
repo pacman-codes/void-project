@@ -1,8 +1,9 @@
 from html import escape
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy import select
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.keyboards.user import (
     SUPPORT_URL,
@@ -17,6 +18,75 @@ from utils.buttons import INSTRUCTION_EN, INSTRUCTION_RU
 
 router = Router()
 
+
+HAPP_DOWNLOAD_URLS = {
+    "ios": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973",
+    "android": "https://play.google.com/store/apps/details?id=com.happproxy",
+    "android_apk": "https://disk.yandex.ru/d/L7LZFitZiiYSNQ",
+    "windows": "https://disk.yandex.ru/d/L7LZFitZiiYSNQ",
+    "macos": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973",
+    "linux": "https://disk.yandex.ru/d/L7LZFitZiiYSNQ",
+    "appletv": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973",
+    "androidtv": "https://play.google.com/store/apps/details?id=com.happproxy",
+}
+
+
+def build_main_instruction_keyboard(lang: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+
+    if lang == "en":
+        builder.button(text="🛠 Detailed instruction", callback_data="open_detailed_instruction")
+        builder.button(text="iOS", url=HAPP_DOWNLOAD_URLS["ios"])
+        builder.button(text="Android (Google Play)", url=HAPP_DOWNLOAD_URLS["android"])
+        builder.button(text="Android (APK)", url=HAPP_DOWNLOAD_URLS["android_apk"])
+        builder.button(text="Windows", url=HAPP_DOWNLOAD_URLS["windows"])
+        builder.button(text="MacOS", url=HAPP_DOWNLOAD_URLS["macos"])
+        builder.button(text="Linux", url=HAPP_DOWNLOAD_URLS["linux"])
+        builder.button(text="AppleTV", url=HAPP_DOWNLOAD_URLS["appletv"])
+        builder.button(text="AndroidTV", url=HAPP_DOWNLOAD_URLS["androidtv"])
+        builder.button(text="🏠 Home", callback_data="back_home")
+    else:
+        builder.button(text="🛠 Подробная инструкция", callback_data="open_detailed_instruction")
+        builder.button(text="iOS", url=HAPP_DOWNLOAD_URLS["ios"])
+        builder.button(text="Android (Google Play)", url=HAPP_DOWNLOAD_URLS["android"])
+        builder.button(text="Android (APK)", url=HAPP_DOWNLOAD_URLS["android_apk"])
+        builder.button(text="Windows", url=HAPP_DOWNLOAD_URLS["windows"])
+        builder.button(text="MacOS", url=HAPP_DOWNLOAD_URLS["macos"])
+        builder.button(text="Linux", url=HAPP_DOWNLOAD_URLS["linux"])
+        builder.button(text="AppleTV", url=HAPP_DOWNLOAD_URLS["appletv"])
+        builder.button(text="AndroidTV", url=HAPP_DOWNLOAD_URLS["androidtv"])
+        builder.button(text="🏠 На главную", callback_data="back_home")
+
+    builder.adjust(1, 1, 2, 2, 2, 2, 1)
+    return builder.as_markup()
+
+
+def build_detailed_instruction_text(lang: str) -> str:
+    if lang == "en":
+        return (
+            "📖 <b>Detailed instruction</b>\n\n"
+            "1. Download the app for your device.\n"
+            "2. Open <b>Subscription link</b> in this bot.\n"
+            "3. Tap your link to copy it.\n"
+            "4. Open the app.\n"
+            "5. Find import/add subscription.\n"
+            "6. Paste the copied link.\n"
+            "7. Save and tap connect ✅\n\n"
+            f'If something does not work, contact <a href="{SUPPORT_URL}">support</a>.'
+        )
+
+    return (
+        "📖 <b>Подробная инструкция</b>\n\n"
+        "1. Скачай приложение для своего устройства.\n"
+        "2. Здесь же, в боте, открой <b>Подписочная ссылка</b>.\n"
+        "3. Нажми на свою ссылку, чтобы скопировать её.\n"
+        "4. Открой приложение.\n"
+        "5. Найди импорт/добавление подписки.\n"
+        "6. Вставь скопированную ссылку.\n"
+        "7. Сохрани и нажми подключение ✅\n\n"
+        f'Если что-то не получается, напиши в <a href="{SUPPORT_URL}">поддержку</a>.'
+    )
+
 PLATFORM_TITLES = {
     "ios": {"ru": "iPhone / iPad", "en": "iPhone / iPad"},
     "android": {"ru": "Android", "en": "Android"},
@@ -27,8 +97,23 @@ PLATFORM_TITLES = {
 
 def build_instruction_text(lang: str) -> str:
     if lang == "en":
-        return "📘 <b>Instruction</b>\n\nChoose your device:"
-    return "📘 <b>Инструкция</b>\n\nВыберите ваше устройство:"
+        return (
+            "📖 <b>Instruction</b>\n\n"
+            "1. Download the app for your device using the buttons below.\n"
+            "2. In this bot, open <b>Subscription link</b>.\n"
+            "3. Tap your link to copy it.\n"
+            "4. Paste it into the app.\n"
+            "5. Tap connect ✅"
+        )
+
+    return (
+        "📖 <b>Инструкция:</b>\n\n"
+        "1. Скачай приложение для своего устройства (ссылки ниже)\n"
+        "2. Здесь же, в боте, открой <b>Подписочная ссылка</b>\n"
+        "3. Нажми на свою ссылку, чтобы скопировать её\n"
+        "4. Вставь её в приложение\n"
+        "5. Нажми «Подключиться» ✅"
+    )
 
 
 def build_platform_instruction_text(
@@ -102,7 +187,7 @@ async def instruction_handler(message: Message) -> None:
 
     await message.answer(
         build_instruction_text(lang),
-        reply_markup=get_instruction_inline_keyboard(lang),
+        reply_markup=build_main_instruction_keyboard(lang),
         parse_mode="HTML",
     )
 
@@ -113,7 +198,7 @@ async def open_instruction(callback: CallbackQuery) -> None:
 
     await callback.message.edit_text(
         build_instruction_text(lang),
-        reply_markup=get_instruction_inline_keyboard(lang),
+        reply_markup=build_main_instruction_keyboard(lang),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -125,7 +210,7 @@ async def back_to_devices(callback: CallbackQuery) -> None:
 
     await callback.message.edit_text(
         build_instruction_text(lang),
-        reply_markup=get_instruction_inline_keyboard(lang),
+        reply_markup=build_main_instruction_keyboard(lang),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -162,6 +247,19 @@ async def open_platform_instruction(callback: CallbackQuery) -> None:
             platform=platform,
             lang=lang,
         ),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "open_detailed_instruction")
+async def open_detailed_instruction(callback: CallbackQuery) -> None:
+    lang = await get_lang(callback.from_user.id)
+
+    await callback.message.edit_text(
+        build_detailed_instruction_text(lang),
+        reply_markup=build_main_instruction_keyboard(lang),
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
