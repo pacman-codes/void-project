@@ -105,8 +105,9 @@ async def build_subscription_by_token(token: str) -> str:
             .where(
                 VPNAccess.user_id == user.id,
                 VPNAccess.is_active.is_(True),
+                VPNAccess.device_number == 1,
             )
-            .order_by(VPNAccess.device_number.asc(), VPNAccess.id.asc())
+            .order_by(VPNAccess.id.asc())
         )
         rows = access_result.scalars().all()
         config_urls = [row.config_url for row in rows if row.config_url]

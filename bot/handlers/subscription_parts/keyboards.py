@@ -27,12 +27,12 @@ def build_tariffs_keyboard(lang: str, source: str = "subscription") -> InlineKey
     if lang == "en":
         builder.button(text="💳 1 month", callback_data="plan_1m")
         builder.button(text="🔥 6 months", callback_data="plan_6m")
-        builder.button(text="🚀 12 months", callback_data="plan_12m")
+        builder.button(text="🚀 12 months", callback_data="plan_12m", style="success")
         builder.button(text="Back", callback_data=back_callback)
     else:
         builder.button(text="💳 1 месяц", callback_data="plan_1m")
         builder.button(text="🔥 6 месяцев", callback_data="plan_6m")
-        builder.button(text="🚀 12 месяцев", callback_data="plan_12m")
+        builder.button(text="🚀 12 месяцев", callback_data="plan_12m", style="success")
         builder.button(text="Назад", callback_data=back_callback)
 
     builder.adjust(1, 1, 1, 1)
@@ -59,43 +59,17 @@ def build_devices_keyboard(
     accesses: list[VPNAccess] | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    accesses = accesses or []
-
-    for access in accesses:
-        if not access.is_active:
-            continue
-
-        device_number = access.device_number or 1
-        if lang == "en":
-            text = f"🔄 Refresh device {device_number}"
-        else:
-            text = f"🔄 Обновить устройство {device_number}"
-
-        builder.button(
-            text=text,
-            callback_data=f"regenerate_device:{device_number}",
-            style="primary",
-        )
-
-    if accesses:
-        builder.button(
-            text="🔄 Refresh all keys" if lang == "en" else "🔄 Обновить все ключи",
-            callback_data="regenerate_all_keys",
-            style="danger",
-        )
 
     if access_type in {"free", "paid"}:
         builder.button(
             text="🔗 Subscription link" if lang == "en" else "🔗 Подписочная ссылка",
             callback_data="open_subscription_link",
-            style="primary",
         )
 
     if access_type == "paid":
         builder.button(
             text="🔑 Add device" if lang == "en" else "🔑 Добавить устройство",
             callback_data="open_extra_device_offer",
-            style="primary",
         )
     else:
         builder.button(
@@ -109,14 +83,7 @@ def build_devices_keyboard(
         callback_data="back_home",
     )
 
-    rows = [1 for _ in accesses if _.is_active]
-    if accesses:
-        rows.append(1)
-    if access_type in {"free", "paid"}:
-        rows.append(1)
-    rows.extend([1, 1])
-    builder.adjust(*rows)
-
+    builder.adjust(1, 1, 1)
     return builder.as_markup()
 
 

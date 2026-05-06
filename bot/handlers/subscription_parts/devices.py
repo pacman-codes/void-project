@@ -1,61 +1,29 @@
-from decimal import Decimal
-import asyncio
-
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery
 from sqlalchemy import select
 
-from bot.keyboards.user import (
-    get_extra_device_offer_keyboard,
-    get_tariff_inline_keyboard,
-)
+from bot.keyboards.user import get_extra_device_offer_keyboard
 from bot.handlers.subscription_parts.common import (
     get_lang,
     safe_callback_answer,
     safe_edit_text,
 )
-from bot.handlers.subscription_parts.access import (
-    activate_free_for_user,
-    get_duration_days,
-    get_offer_state,
-    get_partner_offer_state,
-    user_has_any_access,
-)
 from bot.handlers.subscription_parts.texts import (
     build_extra_device_offer_text,
     build_extra_device_pending_text,
-    build_legal_text,
-    build_payment_text,
-    build_pending_payment_text,
     build_regenerate_all_confirm_text,
     build_regenerate_device_confirm_text,
-    build_subscription_text,
-    build_tariffs_text,
-    get_plan_meta,
 )
 from bot.handlers.subscription_parts.keyboards import (
-    build_legal_keyboard,
+    build_devices_keyboard,
     build_open_payment_url_keyboard,
-    build_payment_keyboard_local,
     build_regenerate_all_confirm_keyboard,
     build_regenerate_device_confirm_keyboard,
-    build_tariffs_keyboard,
-    build_devices_keyboard,
 )
 from db.database import async_session_maker
 from db.models import User, VPNAccess
-from services.legal_service import accept_terms_for_user, get_terms_status
-from services.payment_service import (
-    PaymentServiceError,
-    clear_user_payment_state,
-    create_redirect_payment,
-    get_user_payment_state,
-    is_launch_offer_available,
-    sync_payment_status,
-)
-from services.subscription_service import activate_extra_device_for_user, activate_paid_for_user
+from services.payment_service import get_user_payment_state
 from services.vpn_service import VPNService, VPNServiceError
-from utils.buttons import RENEW_EN, RENEW_RU, SUBSCRIPTION_EN, SUBSCRIPTION_RU
 
 router = Router()
 
@@ -67,67 +35,41 @@ def build_devices_text(
     used_devices: int,
     accesses: list[VPNAccess],
 ) -> str:
+    active_count = len([access for access in accesses if access.is_active])
+
     if access_type == "paid":
         if lang == "en":
-            header = "🔑 <b>Devices</b>\n\n"
-            if accesses:
-                items = []
-                for access in accesses:
-                    title = access.device_name or f"Device {access.device_number}"
-                    key = access.config_url or "Key not found"
-                    items.append(
-                        f"<b>{title}</b>\n"
-                        f"<code>{key}</code>"
-                    )
-                return header + "\n\n".join(items)
-            return header + "No keys yet."
+            return (
+                "🔑 <b>Devices</b>\n\n"
+                "Your plan: <b>Full access</b>\n\n"
+                f"Devices: <b>{active_count} of {device_limit}</b>\n\n"
+                "Use your subscription link as the main connection method.\n"
+                "If you change device or app, copy the subscription link again."
+            )
 
-        header = "🔑 <b>Устройства</b>\n\n"
-        if accesses:
-            items = []
-            for access in accesses:
-                title = access.device_name or f"Устройство {access.device_number}"
-                key = access.config_url or "Ключ не найден"
-                items.append(
-                    f"<b>{title}</b>\n"
-                    f"<code>{key}</code>"
-                )
-            return header + "\n\n".join(items)
-        return header + "Пока ключей нет."
-
-    free_key = accesses[0].config_url if accesses else None
+        return (
+            "🔑 <b>Устройства</b>\n\n"
+            "Ваш тариф: <b>Полный доступ</b>\n\n"
+            f"Устройства: <b>{active_count} из {device_limit}</b>\n\n"
+            "Для подключения используйте подписочную ссылку.\n"
+            "Если меняете устройство или приложение — просто скопируйте подписочную ссылку заново."
+        )
 
     if lang == "en":
-        key_block = (
-            f"\n🔑 <b>Your key</b>\n<code>{free_key}</code>\n\n"
-            if free_key
-            else "\n🔑 <b>Your key</b>\nKey not found yet.\n\n"
-        )
         return (
             "🔑 <b>Devices</b>\n\n"
-            "Your free access includes <b>1 device</b>.\n"
-            "This is enough for a quick start.\n"
-            f"{key_block}"
-            "💎 Full access gives you:\n"
-            "• more devices\n"
-            "• maximum speed\n"
-            "• unlimited usage"
+            "Your plan: <b>Free access</b>\n\n"
+            f"Devices: <b>{active_count} of {device_limit}</b>\n\n"
+            "Use your subscription link as the main connection method.\n\n"
+            "Full access gives you more devices, maximum speed and unlimited usage."
         )
 
-    key_block = (
-        f"\n🔑 <b>Ваш ключ</b>\n<code>{free_key}</code>\n\n"
-        if free_key
-        else "\n🔑 <b>Ваш ключ</b>\nКлюч пока не найден.\n\n"
-    )
     return (
         "🔑 <b>Устройства</b>\n\n"
-        "В бесплатном доступе доступно <b>1 устройство</b>.\n"
-        "Этого хватает для быстрого старта.\n"
-        f"{key_block}"
-        "💎 Полный доступ даёт:\n"
-        "• больше устройств\n"
-        "• максимальную скорость\n"
-        "• использование без ограничений"
+        "Ваш тариф: <b>Бесплатный доступ</b>\n\n"
+        f"Устройства: <b>{active_count} из {device_limit}</b>\n\n"
+        "Для подключения используйте подписочную ссылку.\n\n"
+        "Полный доступ даёт больше устройств, максимальную скорость и использование без ограничений."
     )
 
 
@@ -340,18 +282,14 @@ async def open_add_device(callback: CallbackQuery) -> None:
                     device_name="Устройство 2",
                 )
         except VPNServiceError as e:
-            await safe_callback_answer(
-                callback,
-                str(e),
-                show_alert=True,
-            )
+            await safe_callback_answer(callback, str(e), show_alert=True)
             return
         except Exception:
             await safe_callback_answer(
                 callback,
-                "Не удалось получить ключи. Попробуйте ещё раз позже."
+                "Не удалось получить устройства. Попробуйте ещё раз позже."
                 if lang != "en"
-                else "Could not load keys. Please try again later.",
+                else "Could not load devices. Please try again later.",
                 show_alert=True,
             )
             return
