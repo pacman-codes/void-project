@@ -48,6 +48,11 @@ class User(Base):
         cascade="all, delete-orphan",
     )
 
+    subscription_links: Mapped[list["UserSubscriptionLink"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
 
 class VpnAccess(Base):
     __tablename__ = "vpn_accesses"
@@ -72,6 +77,26 @@ class VpnAccess(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="vpn_accesses")
+
+
+
+
+class UserSubscriptionLink(Base):
+    __tablename__ = "user_subscription_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+
+    token: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    migrated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    raw_disable_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    token_rotated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="subscription_links")
 
 
 VPNAccess = VpnAccess

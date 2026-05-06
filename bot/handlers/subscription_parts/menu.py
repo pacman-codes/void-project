@@ -2,7 +2,8 @@ from decimal import Decimal
 import asyncio
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram.filters import Command
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
 from bot.keyboards.user import (
@@ -54,10 +55,68 @@ from services.payment_service import (
     sync_payment_status,
 )
 from services.subscription_service import activate_extra_device_for_user, activate_paid_for_user
+from services.subscription_link_service import (
+    SubscriptionLinkError,
+    build_public_subscription_url,
+    get_or_create_subscription_link,
+)
 from services.vpn_service import VPNService, VPNServiceError
 from utils.buttons import RENEW_EN, RENEW_RU, SUBSCRIPTION_EN, SUBSCRIPTION_RU
 
 router = Router()
+
+
+def build_subscription_link_text(lang: str, url: str) -> str:
+    if lang == "en":
+        return (
+            "🔗 <b>Your personal subscription link</b>\n\n"
+            "Use this link as the main connection method. It returns your current active access parameters automatically.\n\n"
+            f"<code>{url}</code>\n\n"
+            "Old raw keys still work for now, but they will later become legacy mode."
+        )
+
+    return (
+        "🔗 <b>Ваша персональная подписочная ссылка</b>\n\n"
+        "Используйте эту ссылку как основной способ подключения. Она автоматически отдаёт актуальные параметры доступа.\n\n"
+        f"<code>{url}</code>\n\n"
+        "Старые raw-ключи пока работают, но позже станут legacy-режимом."
+    )
+
+
+def build_subscription_link_keyboard(lang: str, url: str) -> InlineKeyboardMarkup:
+    open_text = "Open subscription" if lang == "en" else "Открыть подписку"
+    home_text = "Home" if lang == "en" else "На главную"
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=open_text, url=url)],
+            [InlineKeyboardButton(text=home_text, callback_data="back_home")],
+        ]
+    )
+
+
+async def send_subscription_link_screen(target: Message | CallbackQuery) -> None:
+    lang = await get_lang(target.from_user.id)
+
+    try:
+        link = await get_or_create_subscription_link(target.from_user.id)
+    except SubscriptionLinkError as exc:
+        if isinstance(target, Message):
+            await target.answer(str(exc))
+        else:
+            await safe_callback_answer(target, str(exc), show_alert=True)
+        return
+
+    url = build_public_subscription_url(link.token)
+    text = build_subscription_link_text(lang, url)
+    keyboard = build_subscription_link_keyboard(lang, url)
+
+    if isinstance(target, Message):
+        await target.answer(text=text, reply_markup=keyboard, parse_mode="HTML")
+    else:
+        await safe_edit_text(target.message, text=text, reply_markup=keyboard, parse_mode="HTML")
+        await safe_callback_answer(target)
+
 
 
 async def send_subscription_screen(target: Message | CallbackQuery) -> None:
@@ -69,6 +128,16 @@ async def send_subscription_screen(target: Message | CallbackQuery) -> None:
         await target.answer(text=text, reply_markup=keyboard, parse_mode="HTML")
     else:
         await safe_edit_text(target.message, text=text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@router.message(Command("sub"))
+async def subscription_link_command(message: Message) -> None:
+    await send_subscription_link_screen(message)
+
+
+@router.callback_query(F.data == "open_subscription_link")
+async def open_subscription_link(callback: CallbackQuery) -> None:
+    await send_subscription_link_screen(callback)
 
 
 async def ensure_terms_then_continue(callback: CallbackQuery, action: str) -> bool:
