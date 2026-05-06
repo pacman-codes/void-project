@@ -93,7 +93,7 @@ def get_active_home_inline_keyboard(
             style="success",
         )
         builder.button(
-            text="🔑 Devices" if lang == "en" else "🔑 Устройства",
+            text="➕ Add devices" if lang == "en" else "➕ Добавить устройства",
             callback_data="open_add_device",
             style="primary",
         )
@@ -134,7 +134,7 @@ def get_active_home_inline_keyboard(
         style="danger",
     )
     builder.button(
-        text="🔑 Devices" if lang == "en" else "🔑 Устройства",
+        text="➕ Add devices" if lang == "en" else "➕ Добавить устройства",
         callback_data="open_add_device",
         style="primary",
     )
