@@ -84,6 +84,13 @@ def build_devices_keyboard(
             style="danger",
         )
 
+    if access_type in {"free", "paid"}:
+        builder.button(
+            text="🔗 Subscription link" if lang == "en" else "🔗 Подписочная ссылка",
+            callback_data="open_subscription_link",
+            style="primary",
+        )
+
     if access_type == "paid":
         builder.button(
             text="🔑 Add device" if lang == "en" else "🔑 Добавить устройство",
@@ -104,6 +111,8 @@ def build_devices_keyboard(
 
     rows = [1 for _ in accesses if _.is_active]
     if accesses:
+        rows.append(1)
+    if access_type in {"free", "paid"}:
         rows.append(1)
     rows.extend([1, 1])
     builder.adjust(*rows)
