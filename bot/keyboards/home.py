@@ -83,6 +83,11 @@ def get_active_home_inline_keyboard(
 
     if _is_paid(access_type):
         builder.button(
+            text="🔗 Subscription link" if lang == "en" else "🔗 Подписочная ссылка",
+            callback_data="open_subscription_link",
+            style="success",
+        )
+        builder.button(
             text="Renew access" if lang == "en" else "Продлить доступ",
             callback_data="open_renew",
             style="success",
@@ -105,13 +110,18 @@ def get_active_home_inline_keyboard(
             callback_data="open_support",
             style="danger",
         )
-        builder.adjust(1, 1, 2, 1)
+        builder.adjust(1, 1, 1, 2, 1)
         return builder.as_markup()
 
     builder.button(
         text="💎 Get full access" if lang == "en" else "💎 Получить полный доступ",
         callback_data="open_subscription",
         style="success",
+    )
+    builder.button(
+        text="🔗 Subscription link" if lang == "en" else "🔗 Подписочная ссылка",
+        callback_data="open_subscription_link",
+        style="primary",
     )
     builder.button(
         text="📘 Instruction" if lang == "en" else "📘 Инструкция",
@@ -133,7 +143,7 @@ def get_active_home_inline_keyboard(
         callback_data="open_language",
         style="primary",
     )
-    builder.adjust(1, 2, 2)
+    builder.adjust(1, 1, 2, 2)
     return builder.as_markup()
 
 
