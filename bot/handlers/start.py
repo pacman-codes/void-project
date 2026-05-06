@@ -133,6 +133,8 @@ async def ensure_user(message: Message) -> User:
             user = User(
                 telegram_id=message.from_user.id,
                 username=message.from_user.username,
+                first_name=message.from_user.first_name,
+                last_name=message.from_user.last_name,
                 language="ru",
                 traffic_limit=DEFAULT_TRAFFIC_LIMIT_MB,
                 traffic_used=0,
@@ -153,6 +155,14 @@ async def ensure_user(message: Message) -> User:
 
         if user.username != message.from_user.username:
             user.username = message.from_user.username
+            changed = True
+
+        if user.first_name != message.from_user.first_name:
+            user.first_name = message.from_user.first_name
+            changed = True
+
+        if user.last_name != message.from_user.last_name:
+            user.last_name = message.from_user.last_name
             changed = True
 
         if user.traffic_limit is None:
