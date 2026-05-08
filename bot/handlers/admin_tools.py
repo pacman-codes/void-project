@@ -7,6 +7,7 @@ from aiogram import F, Router
 from aiogram.types import Message
 from sqlalchemy import select
 
+from config.runtime import DEV_MODE
 from db.database import async_session_maker
 from db.models import User, UserSubscriptionLink, VPNAccess
 from services.vpn_service import VPNService, VPNServiceError
@@ -201,6 +202,224 @@ async def reset_user_profile(telegram_id: int, message: Message) -> None:
             link.is_active = False
 
         await session.commit()
+
+
+
+
+async def collect_cleanup_targets(telegram_id: int) -> tuple[User | None, list[VPNAccess]]:
+    async with async_session_maker() as session:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        user = user_result.scalar_one_or_none()
+
+        if user is None:
+            return None, []
+
+        access_result = await session.execute(
+            select(VPNAccess)
+            .where(VPNAccess.user_id == user.id)
+            .order_by(VPNAccess.device_number.asc(), VPNAccess.id.asc())
+        )
+        accesses = list(access_result.scalars().all())
+
+        return user, accesses
+
+
+def build_cleanup_preview_text(
+    telegram_id: int,
+    user: User | None,
+    accesses: list[VPNAccess],
+) -> str:
+    if user is None:
+        return f"Пользователь не найден\ntelegram_id: {telegram_id}"
+
+    lines = [
+        "🧹 <b>Panel cleanup check</b>",
+        "",
+        f"telegram_id: <code>{telegram_id}</code>",
+        f"user_id: <code>{user.id}</code>",
+        f"username: <code>{user.username or '-'}</code>",
+        f"access_type: <code>{user.access_type or '-'}</code>",
+        "",
+    ]
+
+    if not accesses:
+        lines.append("VPNAccess записей нет.")
+        return "\n".join(lines)
+
+    lines.append("Будут затронуты только DB-записи этого пользователя:")
+    lines.append("")
+
+    for access in accesses:
+        lines.extend(
+            [
+                f"• device_number: <code>{access.device_number}</code>",
+                f"  access_id: <code>{access.id}</code>",
+                f"  active: <code>{access.is_active}</code>",
+                f"  server_name: <code>{access.server_name or '-'}</code>",
+                f"  external_id: <code>{access.external_id or '-'}</code>",
+                f"  client_uuid: <code>{access.client_uuid or '-'}</code>",
+                "",
+            ]
+        )
+
+    lines.append("Для реального удаления: /adminClean " + str(telegram_id))
+    return "\n".join(lines)
+
+
+async def cleanup_user_panel_and_db(telegram_id: int) -> dict:
+    user, accesses = await collect_cleanup_targets(telegram_id)
+
+    if user is None:
+        return {
+            "user_found": False,
+            "telegram_id": telegram_id,
+            "deleted": [],
+            "skipped": [],
+            "errors": [],
+        }
+
+    service = VPNService()
+    deleted: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+
+    for access in accesses:
+        label = (
+            f"access_id={access.id}, "
+            f"device={access.device_number}, "
+            f"external_id={access.external_id or '-'}, "
+            f"client_uuid={access.client_uuid or '-'}"
+        )
+
+        if not access.client_uuid:
+            skipped.append(label + " — no client_uuid")
+            continue
+
+        if DEV_MODE:
+            skipped.append(label + " — DEV_MODE, panel delete skipped")
+            continue
+
+        try:
+            await service._get_panel_client().delete_client(
+                inbound_id=service.inbound_id,
+                client_id=access.client_uuid,
+            )
+            deleted.append(label)
+        except Exception as exc:
+            errors.append(label + f" — {type(exc).__name__}: {exc}")
+
+    if errors:
+        return {
+            "user_found": True,
+            "telegram_id": telegram_id,
+            "deleted": deleted,
+            "skipped": skipped,
+            "errors": errors,
+        }
+
+    async with async_session_maker() as session:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        db_user = user_result.scalar_one_or_none()
+
+        if db_user is not None:
+            access_result = await session.execute(
+                select(VPNAccess).where(VPNAccess.user_id == db_user.id)
+            )
+            for access in access_result.scalars().all():
+                access.is_active = False
+
+            link_result = await session.execute(
+                select(UserSubscriptionLink).where(UserSubscriptionLink.user_id == db_user.id)
+            )
+            for link in link_result.scalars().all():
+                link.is_active = False
+
+            db_user.used_devices = 0
+
+        await session.commit()
+
+    return {
+        "user_found": True,
+        "telegram_id": telegram_id,
+        "deleted": deleted,
+        "skipped": skipped,
+        "errors": errors,
+    }
+
+
+@router.message(F.text.regexp(r"^/adminCleanCheck(?:@\w+)?(?:\s|$)"))
+async def admin_clean_check(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        target_id = parse_target(message)
+        user, accesses = await collect_cleanup_targets(target_id)
+    except ValueError:
+        await message.answer("Формат: /adminCleanCheck [telegram_id]")
+        return
+    except Exception as exc:
+        await message.answer(f"Ошибка adminCleanCheck: {type(exc).__name__}: {exc}")
+        return
+
+    await message.answer(
+        build_cleanup_preview_text(target_id, user, accesses),
+        parse_mode="HTML",
+    )
+
+
+@router.message(F.text.regexp(r"^/adminClean(?:@\w+)?(?:\s|$)"))
+async def admin_clean(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        target_id = parse_target(message)
+        result = await cleanup_user_panel_and_db(target_id)
+    except ValueError:
+        await message.answer("Формат: /adminClean [telegram_id]")
+        return
+    except Exception as exc:
+        await message.answer(f"Ошибка adminClean: {type(exc).__name__}: {exc}")
+        return
+
+    if not result["user_found"]:
+        await message.answer(f"Пользователь не найден\ntelegram_id: {target_id}")
+        return
+
+    lines = [
+        "🧹 <b>Panel cleanup выполнен</b>",
+        "",
+        f"telegram_id: <code>{target_id}</code>",
+        f"deleted: <code>{len(result['deleted'])}</code>",
+        f"skipped: <code>{len(result['skipped'])}</code>",
+        f"errors: <code>{len(result['errors'])}</code>",
+        "",
+    ]
+
+    if result["deleted"]:
+        lines.append("<b>Deleted:</b>")
+        lines.extend(f"• <code>{item}</code>" for item in result["deleted"][:10])
+        lines.append("")
+
+    if result["skipped"]:
+        lines.append("<b>Skipped:</b>")
+        lines.extend(f"• <code>{item}</code>" for item in result["skipped"][:10])
+        lines.append("")
+
+    if result["errors"]:
+        lines.append("<b>Errors:</b>")
+        lines.extend(f"• <code>{item}</code>" for item in result["errors"][:10])
+        lines.append("")
+        lines.append("DB-записи не отключены, потому что были ошибки удаления в panel.")
+    else:
+        lines.append("DB-доступы и подписочные ссылки отключены.")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @router.message(F.text.regexp(r"^/adminPaid(?:@\w+)?(?:\s|$)"))
