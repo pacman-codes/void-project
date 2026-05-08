@@ -8,10 +8,12 @@ from bot.handlers.subscription import router as subscription_router
 from bot.handlers.account import router as account_router
 from bot.handlers.instruction import router as instruction_router
 from bot.handlers.support import router as support_router
+from bot.handlers.admin_tools import router as admin_tools_router
 
 
 def register_handlers(dp: Dispatcher) -> None:
     dp.include_router(start_router)
+    dp.include_router(admin_tools_router)
     dp.include_router(language_router)
     dp.include_router(subscription_router)
     dp.include_router(account_router)
