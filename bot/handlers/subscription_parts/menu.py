@@ -82,49 +82,78 @@ def format_subscription_expiry(value, lang: str) -> str:
     return str(value)
 
 
-async def get_subscription_expiry_for_user(telegram_id: int):
+async def get_subscription_screen_state(
+    telegram_id: int,
+) -> tuple[str | None, object | None]:
     async with async_session_maker() as session:
         result = await session.execute(
-            select(User.subscription_expiry).where(User.telegram_id == telegram_id)
+            select(User.access_type, User.subscription_expiry)
+            .where(User.telegram_id == telegram_id)
         )
-        return result.scalar_one_or_none()
+        row = result.first()
+
+    if not row:
+        return None, None
+
+    return row[0], row[1]
 
 
-def build_subscription_link_text(lang: str, url: str, expiry=None) -> str:
-    expiry_text = format_subscription_expiry(expiry, lang)
+def build_subscription_link_text(
+    lang: str,
+    access_type: str | None,
+    subscription_url: str,
+    expiry=None,
+) -> str:
+    is_free = access_type == "free"
 
     if lang == "en":
+        tariff_text = "Free access" if is_free else "Full access"
+        expiry_block = ""
+        if not is_free and expiry is not None:
+            expiry_block = f"\nActive until: <b>{format_subscription_expiry(expiry, lang)}</b>\n"
+
         return (
-            f"🎉 <b>Subscription active until {expiry_text}</b>\n\n"
-            "Your connection link:\n"
-            f"<code>{url}</code>\n"
-            "(tap to copy)\n\n"
-            "⬆️ Copy this link and paste it into the app."
+            f"🚀 <b>You selected: {tariff_text}</b>{expiry_block}\n"
+            "\n"
+            "1. Download the <b>Happ</b> app.\n"
+            "2. Tap the button <b>“Add configuration to Happ”</b> below.\n"
+            "3. In Happ, tap the big connect button ✅\n"
+            "\n"
+            "If the button does not work, use this subscription link:\n"
+            f"<code>{subscription_url}</code>"
         )
 
+    tariff_text = "Бесплатный доступ" if is_free else "Полный доступ"
+    expiry_block = ""
+    if not is_free and expiry is not None:
+        expiry_block = f"\nДействует до: <b>{format_subscription_expiry(expiry, lang)}</b>\n"
+
     return (
-        f"🎉 <b>Подписка активна до {expiry_text}</b>\n\n"
-        "Твоя ссылка подключения:\n"
-        f"<code>{url}</code>\n"
-        "(нажми, чтобы скопировать)\n\n"
-        "⬆️ Скопируй эту ссылку и просто вставь в приложение."
+        f"🚀 <b>Вы выбрали тариф: {tariff_text}</b>{expiry_block}\n"
+        "\n"
+        "1. Скачайте приложение <b>Happ</b>.\n"
+        "2. Нажмите кнопку <b>«Добавить конфигурацию в Happ»</b> ниже.\n"
+        "3. В приложении Happ нажмите большую кнопку подключения ✅\n"
+        "\n"
+        "Если кнопка не сработает, используйте эту подписочную ссылку:\n"
+        f"<code>{subscription_url}</code>"
     )
 
 
-def build_subscription_link_keyboard(lang: str, url: str, happ_url: str) -> InlineKeyboardMarkup:
-    happ_text = "🔗 Add configuration to Happ" if lang == "en" else "🔗 Добавить конфигурацию в Happ"
-    instruction_text = "📖 Instruction" if lang == "en" else "📖 Инструкция"
+def build_subscription_link_keyboard(lang: str, happ_url: str) -> InlineKeyboardMarkup:
+    happ_text = (
+        "🔗 Add configuration to Happ"
+        if lang == "en"
+        else "🔗 Добавить конфигурацию в Happ"
+    )
     home_text = "🏠 Home" if lang == "en" else "🏠 На главную"
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=happ_text, url=happ_url)],
-            [InlineKeyboardButton(text=instruction_text, callback_data="open_instruction")],
             [InlineKeyboardButton(text=home_text, callback_data="back_home")],
         ]
     )
-
-
 
 
 async def ensure_access_before_subscription_link(telegram_id: int) -> tuple[bool, str]:
@@ -185,18 +214,28 @@ async def send_subscription_link_screen(target: Message | CallbackQuery) -> None
             await safe_callback_answer(target, str(exc), show_alert=True)
         return
 
-    url = build_public_subscription_url(link.token)
+    subscription_url = build_public_subscription_url(link.token)
     happ_url = build_public_happ_import_url(link.token)
-    expiry = await get_subscription_expiry_for_user(target.from_user.id)
-    text = build_subscription_link_text(lang, url, expiry)
-    keyboard = build_subscription_link_keyboard(lang, url, happ_url)
+    access_type, expiry = await get_subscription_screen_state(target.from_user.id)
+
+    text = build_subscription_link_text(
+        lang=lang,
+        access_type=access_type,
+        subscription_url=subscription_url,
+        expiry=expiry,
+    )
+    keyboard = build_subscription_link_keyboard(lang, happ_url)
 
     if isinstance(target, Message):
         await target.answer(text=text, reply_markup=keyboard, parse_mode="HTML")
     else:
-        await safe_edit_text(target.message, text=text, reply_markup=keyboard, parse_mode="HTML")
+        await safe_edit_text(
+            target.message,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
         await safe_callback_answer(target)
-
 
 
 async def send_subscription_screen(target: Message | CallbackQuery) -> None:
@@ -380,11 +419,7 @@ async def subscription_free(callback: CallbackQuery) -> None:
         await safe_callback_answer(callback, result_text, show_alert=True)
         return
 
-    from bot.handlers.start import render_home_screen
-
-    await render_home_screen(callback)
-    lang = await get_lang(callback.from_user.id)
-    await safe_callback_answer(callback, "Done" if lang == "en" else "Готово")
+    await send_subscription_link_screen(callback)
 
 
 @router.callback_query(F.data == "subscription_paid")
@@ -422,10 +457,7 @@ async def legal_accept(callback: CallbackQuery) -> None:
             await safe_callback_answer(callback, free_result, show_alert=True)
             return
 
-        from bot.handlers.start import render_home_screen
-
-        await render_home_screen(callback)
-        await safe_callback_answer(callback, "Done" if lang == "en" else "Готово")
+        await send_subscription_link_screen(callback)
         return
 
     use_launch_offer, used_count = await get_offer_state()
