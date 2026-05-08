@@ -5,6 +5,7 @@ from sqlalchemy import select
 from db.database import async_session_maker
 from db.models import User
 from services.vpn_service import VPNService, VPNServiceError
+from services.audit_log_service import log_user_event
 
 
 async def activate_paid_for_user(
@@ -64,9 +65,43 @@ async def activate_paid_for_user(
             device_name="Устройство 2",
         )
     except VPNServiceError as e:
+        await log_user_event(
+            event_type="subscription_paid_activation_failed",
+            target_telegram_id=user_id,
+            source="subscription_service",
+            status="error",
+            message=str(e),
+            details={
+                "duration_days": duration_days,
+                "promo_code": promo_code,
+            },
+        )
         return False, str(e)
     except Exception as e:
+        await log_user_event(
+            event_type="subscription_paid_activation_failed",
+            target_telegram_id=user_id,
+            source="subscription_service",
+            status="error",
+            message=str(e),
+            details={
+                "duration_days": duration_days,
+                "promo_code": promo_code,
+            },
+        )
         return False, f"Не удалось создать paid-ключи: {e}"
+
+    await log_user_event(
+        event_type="subscription_paid_activated",
+        target_telegram_id=user_id,
+        source="subscription_service",
+        status="ok",
+        message="Paid subscription activated",
+        details={
+            "duration_days": duration_days,
+            "promo_code": promo_code,
+        },
+    )
 
     return True, "OK"
 
@@ -93,6 +128,20 @@ async def activate_extra_device_for_user(user_id: int, devices_to_add: int = 1) 
         if user.used_devices is None or user.used_devices < 0:
             user.used_devices = 0
 
+        new_limit = user.device_limit
+
         await session.commit()
+
+    await log_user_event(
+        event_type="extra_device_activated",
+        target_telegram_id=user_id,
+        source="subscription_service",
+        status="ok",
+        message="Extra device activated",
+        details={
+            "devices_to_add": devices_to_add,
+            "new_device_limit": new_limit,
+        },
+    )
 
     return True, "OK"

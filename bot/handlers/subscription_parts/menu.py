@@ -47,6 +47,7 @@ from bot.handlers.subscription_parts.keyboards import (
 from db.database import async_session_maker
 from db.models import User, VPNAccess
 from services.legal_service import accept_terms_for_user, get_terms_status
+from services.audit_log_service import log_user_event
 from services.payment_service import (
     PaymentServiceError,
     clear_user_payment_state,
@@ -419,6 +420,15 @@ async def subscription_free(callback: CallbackQuery) -> None:
         await safe_callback_answer(callback, result_text, show_alert=True)
         return
 
+    await log_user_event(
+        event_type="subscription_free_activated",
+        target_telegram_id=callback.from_user.id,
+        actor_telegram_id=callback.from_user.id,
+        source="user_flow",
+        status="ok",
+        message="Free subscription activated by user",
+    )
+
     await send_subscription_link_screen(callback)
 
 
@@ -456,6 +466,15 @@ async def legal_accept(callback: CallbackQuery) -> None:
         if not free_success:
             await safe_callback_answer(callback, free_result, show_alert=True)
             return
+
+        await log_user_event(
+            event_type="subscription_free_activated",
+            target_telegram_id=callback.from_user.id,
+            actor_telegram_id=callback.from_user.id,
+            source="legal_accept",
+            status="ok",
+            message="Free subscription activated after legal acceptance",
+        )
 
         await send_subscription_link_screen(callback)
         return

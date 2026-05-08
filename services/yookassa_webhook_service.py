@@ -11,6 +11,7 @@ from db.database import async_session_maker
 from db.models import User
 from services.payment_service import clear_user_payment_state, register_launch_offer_redemption
 from services.subscription_service import activate_extra_device_for_user, activate_paid_for_user
+from services.audit_log_service import log_user_event
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,35 @@ async def process_yookassa_notification(payload: dict) -> tuple[int, str]:
         payment_plan_code = user.payment_plan_code
         payment_devices_to_add = user.payment_devices_to_add or 0
 
+    await log_user_event(
+        event_type="webhook_received",
+        target_telegram_id=telegram_id,
+        source="yookassa_webhook",
+        status=status or "unknown",
+        message="YooKassa webhook received",
+        details={
+            "event": event,
+            "payment_id": payment_id,
+            "payment_kind": payment_kind,
+            "payment_plan_code": payment_plan_code,
+            "payment_devices_to_add": payment_devices_to_add,
+            "stored_payment_status": payment_status,
+        },
+    )
+
     if payment_status != "pending":
+        await log_user_event(
+            event_type="webhook_already_processed",
+            target_telegram_id=telegram_id,
+            source="yookassa_webhook",
+            status="ignored",
+            message="Webhook ignored because payment status is not pending",
+            details={
+                "event": event,
+                "payment_id": payment_id,
+                "stored_payment_status": payment_status,
+            },
+        )
         return 200, "already processed"
 
     if event == "payment.succeeded" or status == "succeeded":
@@ -78,6 +107,18 @@ async def process_yookassa_notification(payload: dict) -> tuple[int, str]:
                 get_duration_days(payment_plan_code or "plan_1m"),
             )
             if not success:
+                await log_user_event(
+                    event_type="payment_activation_failed",
+                    target_telegram_id=telegram_id,
+                    source="yookassa_webhook",
+                    status="error",
+                    message=message,
+                    details={
+                        "payment_id": payment_id,
+                        "payment_kind": payment_kind,
+                        "payment_plan_code": payment_plan_code,
+                    },
+                )
                 return 500, message
 
             if payment_plan_code in {"plan_1m", "plan_6m", "plan_12m"}:
@@ -86,6 +127,20 @@ async def process_yookassa_notification(payload: dict) -> tuple[int, str]:
                     payment_id=payment_id,
                     plan_code=payment_plan_code,
                 )
+
+            await log_user_event(
+                event_type="payment_succeeded",
+                target_telegram_id=telegram_id,
+                source="yookassa_webhook",
+                status="ok",
+                message="Plan payment succeeded",
+                details={
+                    "payment_id": payment_id,
+                    "payment_kind": payment_kind,
+                    "payment_plan_code": payment_plan_code,
+                    "duration_days": get_duration_days(payment_plan_code or "plan_1m"),
+                },
+            )
 
             await clear_user_payment_state(telegram_id)
 
@@ -103,7 +158,32 @@ async def process_yookassa_notification(payload: dict) -> tuple[int, str]:
                 devices_to_add=payment_devices_to_add if payment_devices_to_add > 0 else 1,
             )
             if not success:
+                await log_user_event(
+                    event_type="payment_activation_failed",
+                    target_telegram_id=telegram_id,
+                    source="yookassa_webhook",
+                    status="error",
+                    message=message,
+                    details={
+                        "payment_id": payment_id,
+                        "payment_kind": payment_kind,
+                        "payment_devices_to_add": payment_devices_to_add,
+                    },
+                )
                 return 500, message
+
+            await log_user_event(
+                event_type="payment_succeeded",
+                target_telegram_id=telegram_id,
+                source="yookassa_webhook",
+                status="ok",
+                message="Extra device payment succeeded",
+                details={
+                    "payment_id": payment_id,
+                    "payment_kind": payment_kind,
+                    "payment_devices_to_add": payment_devices_to_add,
+                },
+            )
 
             await clear_user_payment_state(telegram_id)
 
@@ -118,6 +198,20 @@ async def process_yookassa_notification(payload: dict) -> tuple[int, str]:
         return 200, "ignored"
 
     if event == "payment.canceled" or status == "canceled":
+        await log_user_event(
+            event_type="payment_canceled",
+            target_telegram_id=telegram_id,
+            source="yookassa_webhook",
+            status="canceled",
+            message="Payment canceled",
+            details={
+                "event": event,
+                "payment_id": payment_id,
+                "payment_kind": payment_kind,
+                "payment_plan_code": payment_plan_code,
+                "payment_devices_to_add": payment_devices_to_add,
+            },
+        )
         await clear_user_payment_state(telegram_id)
         return 200, "payment canceled"
 

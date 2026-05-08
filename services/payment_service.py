@@ -8,6 +8,7 @@ from sqlalchemy import select, text
 from config.config import settings
 from db.database import async_session_maker
 from db.models import User
+from services.audit_log_service import log_user_event
 
 YOOKASSA_API_URL = "https://api.yookassa.ru/v3/payments"
 
@@ -169,6 +170,20 @@ async def create_redirect_payment(
         and current_state["payment_plan_code"] == plan_code
         and int(current_state["payment_devices_to_add"] or 0) == int(devices_to_add or 0)
     ):
+        await log_user_event(
+            event_type="payment_reused",
+            target_telegram_id=user_id,
+            source="payment_service",
+            status="pending",
+            message="Existing pending payment reused",
+            details={
+                "payment_id": current_state["payment_id"],
+                "kind": kind,
+                "plan_code": plan_code,
+                "devices_to_add": devices_to_add,
+            },
+        )
+
         return {
             "payment_id": current_state["payment_id"],
             "payment_status": current_state["payment_status"],
@@ -242,6 +257,22 @@ async def create_redirect_payment(
         user.payment_confirmation_url = confirmation_url
 
         await session.commit()
+
+    await log_user_event(
+        event_type="payment_created",
+        target_telegram_id=user_id,
+        source="payment_service",
+        status=status or "created",
+        message="Redirect payment created",
+        details={
+            "payment_id": payment_id,
+            "kind": kind,
+            "plan_code": plan_code,
+            "devices_to_add": devices_to_add,
+            "amount_rub": _format_amount(amount_rub),
+            "description": description,
+        },
+    )
 
     return {
         "payment_id": payment_id,
