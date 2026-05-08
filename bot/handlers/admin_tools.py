@@ -296,8 +296,8 @@ def build_cleanup_preview_text(
                 f"  access_id: <code>{access.id}</code>",
                 f"  active: <code>{access.is_active}</code>",
                 f"  server_name: <code>{access.server_name or '-'}</code>",
-                f"  external_id: <code>{access.external_id or '-'}</code>",
-                f"  client_uuid: <code>{access.client_uuid or '-'}</code>",
+                f"  external_id: <code>{h(mask_value(access.external_id))}</code>",
+                f"  client_uuid: <code>{h(mask_value(access.client_uuid))}</code>",
                 "",
             ]
         )
@@ -714,6 +714,19 @@ async def admin_clean_check(message: Message) -> None:
     except Exception as exc:
         await message.answer(f"Ошибка adminCleanCheck: {type(exc).__name__}: {exc}")
         return
+
+    await log_user_event(
+        event_type="admin_clean_check",
+        target_telegram_id=target_id,
+        actor_telegram_id=message.from_user.id if message.from_user else None,
+        user_id=user.id if user else None,
+        source="admin_tools",
+        status="ok" if user else "not_found",
+        message="Admin cleanup preview",
+        details={
+            "access_count": len(accesses),
+        },
+    )
 
     await message.answer(
         build_cleanup_preview_text(target_id, user, accesses),
