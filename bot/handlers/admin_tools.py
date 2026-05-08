@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import html
 from datetime import datetime, timedelta
 
 from aiogram import F, Router
@@ -349,6 +350,225 @@ async def cleanup_user_panel_and_db(telegram_id: int) -> dict:
         "skipped": skipped,
         "errors": errors,
     }
+
+
+
+
+def mask_value(value: object | None, keep_start: int = 6, keep_end: int = 4) -> str:
+    if value is None:
+        return "-"
+
+    raw = str(value)
+    if not raw:
+        return "-"
+
+    if len(raw) <= keep_start + keep_end + 3:
+        return raw
+
+    return f"{raw[:keep_start]}...{raw[-keep_end:]}"
+
+
+def format_dt(value: datetime | None) -> str:
+    if value is None:
+        return "-"
+
+    return value.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def format_time_left(expiry: datetime | None) -> str:
+    if expiry is None:
+        return "-"
+
+    delta = expiry - datetime.utcnow()
+    total_seconds = int(delta.total_seconds())
+
+    if total_seconds <= 0:
+        return "expired"
+
+    days = total_seconds // 86400
+    hours = (total_seconds % 86400) // 3600
+    minutes = (total_seconds % 3600) // 60
+
+    if days > 0:
+        return f"{days}d {hours}h"
+
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+
+    return f"{minutes}m"
+
+
+def h(value: object | None) -> str:
+    if value is None:
+        return "-"
+
+    raw = str(value)
+    if not raw:
+        return "-"
+
+    return html.escape(raw)
+
+
+def bool_h(value: bool | None) -> str:
+    return "yes" if value else "no"
+
+
+async def load_admin_user_snapshot(
+    telegram_id: int,
+) -> tuple[User | None, list[VPNAccess], list[UserSubscriptionLink]]:
+    async with async_session_maker() as session:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        user = user_result.scalar_one_or_none()
+
+        if user is None:
+            return None, [], []
+
+        access_result = await session.execute(
+            select(VPNAccess)
+            .where(VPNAccess.user_id == user.id)
+            .order_by(VPNAccess.device_number.asc(), VPNAccess.id.asc())
+        )
+        accesses = list(access_result.scalars().all())
+
+        link_result = await session.execute(
+            select(UserSubscriptionLink)
+            .where(UserSubscriptionLink.user_id == user.id)
+            .order_by(UserSubscriptionLink.id.asc())
+        )
+        links = list(link_result.scalars().all())
+
+        return user, accesses, links
+
+
+def build_admin_user_text(
+    telegram_id: int,
+    user: User | None,
+    accesses: list[VPNAccess],
+    links: list[UserSubscriptionLink],
+) -> str:
+    if user is None:
+        return f"User not found: <code>{telegram_id}</code>"
+
+    active_accesses = [access for access in accesses if access.is_active]
+    inactive_accesses = [access for access in accesses if not access.is_active]
+    active_links = [link for link in links if link.is_active]
+    inactive_links = [link for link in links if not link.is_active]
+
+    lines = [
+        "👤 <b>Admin user</b>",
+        "",
+        f"db_user_id: <code>{user.id}</code>",
+        f"telegram_id: <code>{user.telegram_id}</code>",
+        f"username: <code>{h(user.username)}</code>",
+        f"first_name: <code>{h(user.first_name)}</code>",
+        f"last_name: <code>{h(user.last_name)}</code>",
+        f"language: <code>{h(user.language)}</code>",
+        "",
+        f"is_active: <code>{bool_h(user.is_active)}</code>",
+        f"access_type: <code>{h(user.access_type)}</code>",
+        f"subscription_expiry: <code>{format_dt(user.subscription_expiry)}</code>",
+        f"time_left: <code>{format_time_left(user.subscription_expiry)}</code>",
+        "",
+        f"traffic_used: <code>{user.traffic_used}</code>",
+        f"traffic_limit: <code>{h(user.traffic_limit)}</code>",
+        f"device_limit: <code>{user.device_limit}</code>",
+        f"used_devices: <code>{user.used_devices}</code>",
+        "",
+        f"payment_status: <code>{h(user.payment_status)}</code>",
+        f"payment_id: <code>{h(mask_value(user.payment_id))}</code>",
+        f"payment_kind: <code>{h(user.payment_kind)}</code>",
+        f"payment_plan_code: <code>{h(user.payment_plan_code)}</code>",
+        f"payment_devices_to_add: <code>{user.payment_devices_to_add}</code>",
+        f"first_paid_at: <code>{format_dt(user.first_paid_at)}</code>",
+        "",
+        f"payment_promo_code: <code>{h(user.payment_promo_code)}</code>",
+        f"promo_applied: <code>{bool_h(user.promo_applied)}</code>",
+        f"promo_type: <code>{h(user.promo_type)}</code>",
+        f"partner_offer_code: <code>{h(user.partner_offer_code)}</code>",
+        f"partner_offer_used: <code>{bool_h(user.partner_offer_used)}</code>",
+        "",
+        f"terms_accepted: <code>{bool_h(user.terms_accepted)}</code>",
+        f"terms_accepted_at: <code>{format_dt(user.terms_accepted_at)}</code>",
+        "",
+        "🔑 <b>VPN access</b>",
+        f"total: <code>{len(accesses)}</code>, active: <code>{len(active_accesses)}</code>, inactive: <code>{len(inactive_accesses)}</code>",
+    ]
+
+    if accesses:
+        lines.append("")
+        for access in accesses[:10]:
+            lines.extend(
+                [
+                    f"• access_id: <code>{access.id}</code>",
+                    f"  server_name: <code>{h(access.server_name)}</code>",
+                    f"  device: <code>{access.device_number}</code> / <code>{h(access.device_name)}</code>",
+                    f"  active: <code>{bool_h(access.is_active)}</code>",
+                    f"  external_id: <code>{h(mask_value(access.external_id))}</code>",
+                    f"  client_uuid: <code>{h(mask_value(access.client_uuid))}</code>",
+                    f"  config_url: <code>{'present' if access.config_url else 'empty'}</code>",
+                    f"  created_at: <code>{format_dt(access.created_at)}</code>",
+                    f"  updated_at: <code>{format_dt(access.updated_at)}</code>",
+                    "",
+                ]
+            )
+
+        if len(accesses) > 10:
+            lines.append(f"...and {len(accesses) - 10} more VPNAccess records")
+            lines.append("")
+
+    lines.extend(
+        [
+            "🔗 <b>Subscription links</b>",
+            f"total: <code>{len(links)}</code>, active: <code>{len(active_links)}</code>, inactive: <code>{len(inactive_links)}</code>",
+        ]
+    )
+
+    if links:
+        lines.append("")
+        for link in links[:10]:
+            lines.extend(
+                [
+                    f"• link_id: <code>{link.id}</code>",
+                    f"  active: <code>{bool_h(link.is_active)}</code>",
+                    f"  token: <code>{h(mask_value(link.token))}</code>",
+                    f"  created_at: <code>{format_dt(link.created_at)}</code>",
+                    f"  last_used_at: <code>{format_dt(link.last_used_at)}</code>",
+                    f"  migrated_at: <code>{format_dt(link.migrated_at)}</code>",
+                    f"  raw_disable_after: <code>{format_dt(link.raw_disable_after)}</code>",
+                    f"  token_rotated_at: <code>{format_dt(link.token_rotated_at)}</code>",
+                    "",
+                ]
+            )
+
+        if len(links) > 10:
+            lines.append(f"...and {len(links) - 10} more subscription links")
+
+    text = "\n".join(lines).strip()
+
+    if len(text) > 3900:
+        text = text[:3800].rstrip() + "\n\n...truncated"
+
+    return text
+
+
+@router.message(F.text.regexp(r"^/adminUser(?:@\w+)?(?:\s|$)"))
+async def admin_user_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        telegram_id = parse_target(message)
+    except ValueError:
+        await message.answer("Формат: /adminUser &lt;telegram_id&gt;")
+        return
+
+    try:
+        user, accesses, links = await load_admin_user_snapshot(telegram_id)
+        await message.answer(build_admin_user_text(telegram_id, user, accesses, links))
+    except Exception as exc:
+        await message.answer(f"Ошибка adminUser: {type(exc).__name__}: {html.escape(str(exc))}")
 
 
 @router.message(F.text.regexp(r"^/adminCleanCheck(?:@\w+)?(?:\s|$)"))
