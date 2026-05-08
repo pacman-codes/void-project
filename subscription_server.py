@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlparse
 
 from services.subscription_link_service import (
     SubscriptionLinkError,
+    build_public_subscription_url,
     build_subscription_by_token,
 )
 
@@ -40,7 +41,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         parts = [part for part in parsed.path.split("/") if part]
 
-        if len(parts) != 2 or parts[0] != "sub":
+        if len(parts) != 2 or parts[0] not in {"sub", "happ"}:
             self._send_text(404, "Not found\n")
             return
 
@@ -48,6 +49,11 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
 
         if not token:
             self._send_text(400, "Bad request\n")
+            return
+
+        if parts[0] == "happ":
+            subscription_url = build_public_subscription_url(token)
+            self._redirect(f"happ://add/{subscription_url}")
             return
 
         try:
@@ -68,6 +74,12 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args) -> None:
         logging.info("subscription_server: " + format, *args)
+
+    def _redirect(self, url: str) -> None:
+        self.send_response(302)
+        self.send_header("Location", url)
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
     def _send_text(self, status: int, body: str) -> None:
         data = body.encode("utf-8")

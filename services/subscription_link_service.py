@@ -35,6 +35,12 @@ def _user_has_active_access(user: User) -> bool:
     return False
 
 
+
+def build_public_happ_import_url(token: str) -> str:
+    base_url = os.getenv("SUBSCRIPTION_PUBLIC_BASE_URL", "http://127.0.0.1:8088").rstrip("/")
+    return f"{base_url}/happ/{token}"
+
+
 async def get_or_create_subscription_link(telegram_id: int) -> UserSubscriptionLink:
     async with async_session_maker() as session:
         user_result = await session.execute(

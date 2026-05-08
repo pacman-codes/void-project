@@ -59,6 +59,7 @@ from services.access_service import get_access_status
 from services.subscription_service import activate_extra_device_for_user, activate_paid_for_user
 from services.subscription_link_service import (
     SubscriptionLinkError,
+    build_public_happ_import_url,
     build_public_subscription_url,
     get_or_create_subscription_link,
 )
@@ -110,12 +111,14 @@ def build_subscription_link_text(lang: str, url: str, expiry=None) -> str:
     )
 
 
-def build_subscription_link_keyboard(lang: str, url: str) -> InlineKeyboardMarkup:
+def build_subscription_link_keyboard(lang: str, url: str, happ_url: str) -> InlineKeyboardMarkup:
+    happ_text = "🔗 Add configuration to Happ" if lang == "en" else "🔗 Добавить конфигурацию в Happ"
     instruction_text = "📖 Instruction" if lang == "en" else "📖 Инструкция"
     home_text = "🏠 Home" if lang == "en" else "🏠 На главную"
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text=happ_text, url=happ_url)],
             [InlineKeyboardButton(text=instruction_text, callback_data="open_instruction")],
             [InlineKeyboardButton(text=home_text, callback_data="back_home")],
         ]
@@ -183,9 +186,10 @@ async def send_subscription_link_screen(target: Message | CallbackQuery) -> None
         return
 
     url = build_public_subscription_url(link.token)
+    happ_url = build_public_happ_import_url(link.token)
     expiry = await get_subscription_expiry_for_user(target.from_user.id)
     text = build_subscription_link_text(lang, url, expiry)
-    keyboard = build_subscription_link_keyboard(lang, url)
+    keyboard = build_subscription_link_keyboard(lang, url, happ_url)
 
     if isinstance(target, Message):
         await target.answer(text=text, reply_markup=keyboard, parse_mode="HTML")
