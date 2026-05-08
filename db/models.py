@@ -101,4 +101,38 @@ class UserSubscriptionLink(Base):
     user: Mapped["User"] = relationship(back_populates="subscription_links")
 
 
+
+class UserEvent(Base):
+    __tablename__ = "user_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True,
+    )
+    target_telegram_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        index=True,
+    )
+    actor_telegram_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        index=True,
+    )
+
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        index=True,
+    )
+
 VPNAccess = VpnAccess

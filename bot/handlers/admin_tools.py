@@ -12,6 +12,7 @@ from config.runtime import DEV_MODE
 from db.database import async_session_maker
 from db.models import User, UserSubscriptionLink, VPNAccess
 from services.vpn_service import VPNService, VPNServiceError
+from services.audit_log_service import get_recent_user_events, log_user_event
 
 router = Router()
 
@@ -129,10 +130,25 @@ async def set_user_paid(telegram_id: int, days: int, message: Message) -> None:
         device_number=1,
         device_name="Устройство 1",
     )
+
     await service.ensure_vpn_access_record(
         telegram_id=telegram_id,
         device_number=2,
         device_name="Устройство 2",
+    )
+
+    await log_user_event(
+        event_type="admin_paid",
+        target_telegram_id=telegram_id,
+        actor_telegram_id=message.from_user.id if message.from_user else None,
+        source="admin_tools",
+        status="ok",
+        message="Paid access activated by admin",
+        details={
+            "days": days,
+            "expires_at": expires_at.isoformat(),
+            "device_limit": 2,
+        },
     )
 
 
@@ -161,6 +177,18 @@ async def set_user_free(telegram_id: int, message: Message) -> None:
         telegram_id=telegram_id,
         device_number=1,
         device_name="Устройство 1",
+    )
+
+    await log_user_event(
+        event_type="admin_free",
+        target_telegram_id=telegram_id,
+        actor_telegram_id=message.from_user.id if message.from_user else None,
+        source="admin_tools",
+        status="ok",
+        message="Free access activated by admin",
+        details={
+            "device_limit": 1,
+        },
     )
 
 
@@ -203,6 +231,15 @@ async def reset_user_profile(telegram_id: int, message: Message) -> None:
             link.is_active = False
 
         await session.commit()
+
+    await log_user_event(
+        event_type="admin_reset",
+        target_telegram_id=telegram_id,
+        actor_telegram_id=message.from_user.id if message.from_user else None,
+        source="admin_tools",
+        status="ok",
+        message="User profile reset by admin",
+    )
 
 
 
@@ -269,7 +306,7 @@ def build_cleanup_preview_text(
     return "\n".join(lines)
 
 
-async def cleanup_user_panel_and_db(telegram_id: int) -> dict:
+async def cleanup_user_panel_and_db(telegram_id: int, actor_telegram_id: int | None = None) -> dict:
     user, accesses = await collect_cleanup_targets(telegram_id)
 
     if user is None:
@@ -342,6 +379,20 @@ async def cleanup_user_panel_and_db(telegram_id: int) -> dict:
             db_user.used_devices = 0
 
         await session.commit()
+
+    await log_user_event(
+        event_type="admin_clean",
+        target_telegram_id=telegram_id,
+        actor_telegram_id=actor_telegram_id,
+        source="admin_tools",
+        status="ok",
+        message="Panel and DB access cleanup completed by admin",
+        details={
+            "deleted_count": len(deleted),
+            "skipped_count": len(skipped),
+            "error_count": len(errors),
+        },
+    )
 
     return {
         "user_found": True,
@@ -566,9 +617,87 @@ async def admin_user_command(message: Message) -> None:
 
     try:
         user, accesses, links = await load_admin_user_snapshot(telegram_id)
+        await log_user_event(
+            event_type="admin_user_lookup",
+            target_telegram_id=telegram_id,
+            actor_telegram_id=message.from_user.id if message.from_user else None,
+            user_id=user.id if user else None,
+            source="admin_tools",
+            status="ok" if user else "not_found",
+            message="Admin user lookup",
+        )
         await message.answer(build_admin_user_text(telegram_id, user, accesses, links))
     except Exception as exc:
         await message.answer(f"Ошибка adminUser: {type(exc).__name__}: {html.escape(str(exc))}")
+
+
+
+
+def build_admin_events_text(telegram_id: int, events: list) -> str:
+    if not events:
+        return f"📜 <b>Admin events</b>\n\ntelegram_id: <code>{telegram_id}</code>\nСобытий нет."
+
+    lines = [
+        "📜 <b>Admin events</b>",
+        "",
+        f"telegram_id: <code>{telegram_id}</code>",
+        f"events: <code>{len(events)}</code>",
+        "",
+    ]
+
+    for event in events:
+        details = event.details_json or "-"
+        if len(details) > 180:
+            details = details[:180].rstrip() + "..."
+
+        lines.extend(
+            [
+                f"• <code>{format_dt(event.created_at)}</code>",
+                f"  type: <code>{h(event.event_type)}</code>",
+                f"  status: <code>{h(event.status)}</code>",
+                f"  actor: <code>{h(event.actor_telegram_id)}</code>",
+                f"  source: <code>{h(event.source)}</code>",
+                f"  message: <code>{h(event.message)}</code>",
+                f"  details: <code>{h(details)}</code>",
+                "",
+            ]
+        )
+
+    text = "\n".join(lines).strip()
+    if len(text) > 3900:
+        text = text[:3800].rstrip() + "\n\n...truncated"
+
+    return text
+
+
+@router.message(F.text.regexp(r"^/adminEvents(?:@\w+)?(?:\s|$)"))
+async def admin_events_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        args = parse_admin_args(message)
+
+        if not args:
+            if not message.from_user:
+                await message.answer("Формат: /adminEvents &lt;telegram_id&gt; [limit]")
+                return
+            target_id = message.from_user.id
+            limit = 10
+        else:
+            target_id = int(args[0])
+            limit = int(args[1]) if len(args) > 1 else 10
+
+        limit = max(1, min(limit, 30))
+    except ValueError:
+        await message.answer("Формат: /adminEvents &lt;telegram_id&gt; [limit]")
+        return
+
+    try:
+        events = await get_recent_user_events(target_id, limit)
+        await message.answer(build_admin_events_text(target_id, events))
+    except Exception as exc:
+        await message.answer(f"Ошибка adminEvents: {type(exc).__name__}: {html.escape(str(exc))}")
 
 
 @router.message(F.text.regexp(r"^/adminCleanCheck(?:@\w+)?(?:\s|$)"))
@@ -599,7 +728,7 @@ async def admin_clean(message: Message) -> None:
 
     try:
         target_id = parse_target(message)
-        result = await cleanup_user_panel_and_db(target_id)
+        result = await cleanup_user_panel_and_db(target_id, actor_telegram_id=message.from_user.id if message.from_user else None)
     except ValueError:
         await message.answer("Формат: /adminClean [telegram_id]")
         return
