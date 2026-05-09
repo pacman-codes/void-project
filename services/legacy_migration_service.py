@@ -358,36 +358,44 @@ async def notify_legacy_migration_user(
 async def collect_legacy_migration_candidates(limit: int = 50) -> list[int]:
     safe_limit = max(1, min(int(limit), 500))
 
-    service = VPNService()
-    inbound = await service._get_panel_client().get_inbound_info(service.inbound_id)
-
-    panel_tg_ids: set[int] = set()
-    for client in inbound.clients:
-        if not client.enable:
-            continue
-
-        tg_id = _client_tg_id(client)
-        if tg_id is not None:
-            panel_tg_ids.add(tg_id)
-
     async with async_session_maker() as session:
         users_result = await session.execute(
             select(User)
-            .where(User.access_type.in_(["free", "paid"]))
+            .where(
+                User.access_type.in_(["free", "paid"]),
+                User.is_active.is_(True),
+            )
             .order_by(User.id.asc())
             .limit(10000)
         )
         users = list(users_result.scalars().all())
 
     result: list[int] = []
+    now = _now()
 
     for user in users:
-        if user.telegram_id not in panel_tg_ids:
-            continue
+        if user.access_type == "paid":
+            if not user.subscription_expiry or user.subscription_expiry <= now:
+                continue
 
         snapshot = await get_legacy_migration_snapshot(user.telegram_id)
-        if snapshot.get("category") in {"paid_legacy", "free_legacy"} and snapshot.get("should_notify"):
-            result.append(user.telegram_id)
+
+        if snapshot.get("already_notified"):
+            continue
+
+        if snapshot.get("category") not in {"paid_legacy", "free_legacy"}:
+            continue
+
+        if not snapshot.get("should_notify"):
+            continue
+
+        active_db_access_count = int(snapshot.get("active_db_access_count") or 0)
+        legacy_panel_client_count = int(snapshot.get("legacy_panel_client_count") or 0)
+
+        if active_db_access_count <= 0 and legacy_panel_client_count <= 0:
+            continue
+
+        result.append(user.telegram_id)
 
         if len(result) >= safe_limit:
             break
