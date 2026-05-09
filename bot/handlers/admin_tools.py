@@ -13,6 +13,7 @@ from db.database import async_session_maker
 from db.models import User, UserSubscriptionLink, VPNAccess
 from services.vpn_service import VPNService, VPNServiceError
 from services.audit_log_service import get_recent_user_events, log_user_event
+from services.expiry_service import expire_paid_users_once
 
 router = Router()
 
@@ -698,6 +699,93 @@ async def admin_events_command(message: Message) -> None:
         await message.answer(build_admin_events_text(target_id, events))
     except Exception as exc:
         await message.answer(f"Ошибка adminEvents: {type(exc).__name__}: {html.escape(str(exc))}")
+
+
+
+
+def build_expiry_result_text(title: str, result: dict) -> str:
+    lines = [
+        f"⏳ <b>{h(title)}</b>",
+        "",
+        f"dry_run: <code>{result.get('dry_run')}</code>",
+        f"found: <code>{result.get('found')}</code>",
+        f"processed: <code>{result.get('processed')}</code>",
+        f"checked_at: <code>{h(result.get('checked_at'))}</code>",
+        "",
+    ]
+
+    results = result.get("results") or []
+    if not results:
+        lines.append("Expired paid users not found.")
+        return "\n".join(lines)
+
+    for item in results[:20]:
+        lines.extend(
+            [
+                f"• telegram_id: <code>{h(item.get('telegram_id'))}</code>",
+                f"  user_id: <code>{h(item.get('user_id'))}</code>",
+                f"  status: <code>{h(item.get('status'))}</code>",
+                f"  message: <code>{h(item.get('message'))}</code>",
+                f"  old_expiry: <code>{h(item.get('old_subscription_expiry'))}</code>",
+                f"  extra_active_count: <code>{h(item.get('extra_active_count'))}</code>",
+                f"  deleted: <code>{len(item.get('deleted') or [])}</code>",
+                f"  skipped: <code>{len(item.get('skipped') or [])}</code>",
+                f"  errors: <code>{len(item.get('errors') or [])}</code>",
+                "",
+            ]
+        )
+
+    if len(results) > 20:
+        lines.append(f"...and {len(results) - 20} more")
+
+    text = "\n".join(lines).strip()
+    if len(text) > 3900:
+        text = text[:3800].rstrip() + "\n\n...truncated"
+
+    return text
+
+
+def parse_optional_limit(message: Message, default: int = 50) -> int:
+    args = parse_admin_args(message)
+    if not args:
+        return default
+    return max(1, min(int(args[0]), 200))
+
+
+@router.message(F.text.regexp(r"^/adminExpireCheck(?:@\w+)?(?:\s|$)"))
+async def admin_expire_check(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        limit = parse_optional_limit(message)
+    except ValueError:
+        await message.answer("Формат: /adminExpireCheck [limit]")
+        return
+
+    try:
+        result = await expire_paid_users_once(limit=limit, dry_run=True)
+        await message.answer(build_expiry_result_text("Paid expiry check", result))
+    except Exception as exc:
+        await message.answer(f"Ошибка adminExpireCheck: {type(exc).__name__}: {html.escape(str(exc))}")
+
+
+@router.message(F.text.regexp(r"^/adminExpireRun(?:@\w+)?(?:\s|$)"))
+async def admin_expire_run(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        limit = parse_optional_limit(message)
+    except ValueError:
+        await message.answer("Формат: /adminExpireRun [limit]")
+        return
+
+    try:
+        result = await expire_paid_users_once(limit=limit, dry_run=False)
+        await message.answer(build_expiry_result_text("Paid expiry run", result))
+    except Exception as exc:
+        await message.answer(f"Ошибка adminExpireRun: {type(exc).__name__}: {html.escape(str(exc))}")
 
 
 @router.message(F.text.regexp(r"^/adminCleanCheck(?:@\w+)?(?:\s|$)"))
