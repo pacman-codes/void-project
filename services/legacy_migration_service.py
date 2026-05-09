@@ -8,7 +8,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select
 
 from db.database import async_session_maker
-from db.models import User, UserEvent, VPNAccess
+from db.models import User, UserEvent, UserSubscriptionLink, VPNAccess
 from services.audit_log_service import log_user_event
 from services.panel_client import InboundClient
 from services.vpn_service import VPNService
@@ -203,6 +203,21 @@ async def get_legacy_migration_snapshot(telegram_id: int) -> dict[str, Any]:
     active_emails = {access.external_id for access in active_accesses if access.external_id}
     active_uuids = {access.client_uuid for access in active_accesses if access.client_uuid}
 
+    async with async_session_maker() as session:
+        links_result = await session.execute(
+            select(UserSubscriptionLink)
+            .where(UserSubscriptionLink.user_id == user.id)
+            .order_by(UserSubscriptionLink.id.asc())
+        )
+        subscription_links = list(links_result.scalars().all())
+
+    active_subscription_links = [link for link in subscription_links if link.is_active]
+    used_subscription_links = [
+        link for link in active_subscription_links
+        if link.last_used_at is not None or link.migrated_at is not None
+    ]
+    needs_subscription_migration = len(used_subscription_links) == 0
+
     panel_clients = await _get_enabled_panel_clients_by_tg_id(telegram_id)
 
     current_clients: list[dict[str, Any]] = []
@@ -223,10 +238,10 @@ async def get_legacy_migration_snapshot(telegram_id: int) -> dict[str, Any]:
     category: str | None = None
     should_notify = False
 
-    if access_type == "paid" and has_legacy:
+    if access_type == "paid" and (has_legacy or needs_subscription_migration):
         category = "paid_legacy"
         should_notify = True
-    elif access_type == "free" and has_legacy:
+    elif access_type == "free" and (has_legacy or needs_subscription_migration):
         category = "free_legacy"
         should_notify = True
     elif access_type not in {"free", "paid"}:
@@ -249,6 +264,10 @@ async def get_legacy_migration_snapshot(telegram_id: int) -> dict[str, Any]:
         "legacy_grace_days": LEGACY_GRACE_DAYS,
         "legacy_disable_after": (_now() + timedelta(days=LEGACY_GRACE_DAYS)).isoformat(),
         "active_db_access_count": len(active_accesses),
+        "subscription_link_count": len(subscription_links),
+        "active_subscription_link_count": len(active_subscription_links),
+        "used_subscription_link_count": len(used_subscription_links),
+        "needs_subscription_migration": needs_subscription_migration,
         "panel_client_count": len(panel_clients),
         "current_panel_client_count": len(current_clients),
         "legacy_panel_client_count": len(legacy_clients),
