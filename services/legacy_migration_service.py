@@ -354,6 +354,7 @@ async def collect_legacy_migration_candidates(limit: int = 50) -> list[int]:
     async with async_session_maker() as session:
         users_result = await session.execute(
             select(User)
+            .where(User.access_type.in_(["free", "paid"]))
             .order_by(User.id.asc())
             .limit(10000)
         )
@@ -362,14 +363,12 @@ async def collect_legacy_migration_candidates(limit: int = 50) -> list[int]:
     result: list[int] = []
 
     for user in users:
-        if user.access_type not in {"free", "paid"}:
-            result.append(user.telegram_id)
+        if user.telegram_id not in panel_tg_ids:
             continue
 
-        if user.telegram_id in panel_tg_ids:
-            snapshot = await get_legacy_migration_snapshot(user.telegram_id)
-            if snapshot.get("should_notify"):
-                result.append(user.telegram_id)
+        snapshot = await get_legacy_migration_snapshot(user.telegram_id)
+        if snapshot.get("category") in {"paid_legacy", "free_legacy"} and snapshot.get("should_notify"):
+            result.append(user.telegram_id)
 
         if len(result) >= safe_limit:
             break
