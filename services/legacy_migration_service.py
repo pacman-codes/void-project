@@ -125,17 +125,34 @@ def _notification_keyboard(category: str) -> InlineKeyboardMarkup:
 
 
 async def _already_notified(telegram_id: int, event_type: str) -> bool:
+    terminal_error_markers = (
+        "bot was blocked by the user",
+        "user is deactivated",
+        "chat not found",
+        "user not found",
+    )
+
     async with async_session_maker() as session:
         result = await session.execute(
-            select(UserEvent.id)
+            select(UserEvent.status, UserEvent.message)
             .where(
                 UserEvent.target_telegram_id == telegram_id,
                 UserEvent.event_type == event_type,
-                UserEvent.status == "ok",
             )
-            .limit(1)
+            .order_by(UserEvent.created_at.desc(), UserEvent.id.desc())
+            .limit(20)
         )
-        return result.scalar_one_or_none() is not None
+        rows = list(result.all())
+
+    for status, message in rows:
+        if status == "ok":
+            return True
+
+        message_text = str(message or "").lower()
+        if status == "error" and any(marker in message_text for marker in terminal_error_markers):
+            return True
+
+    return False
 
 
 async def _load_user_and_active_accesses(
