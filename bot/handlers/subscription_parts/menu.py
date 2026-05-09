@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 
 from bot.keyboards.user import (
@@ -142,19 +143,22 @@ def build_subscription_link_text(
 
 
 def build_subscription_link_keyboard(lang: str, happ_url: str) -> InlineKeyboardMarkup:
-    happ_text = (
-        "🔗 Add configuration to Happ"
-        if lang == "en"
-        else "🔗 Добавить конфигурацию в Happ"
-    )
-    home_text = "🏠 Home" if lang == "en" else "🏠 На главную"
+    builder = InlineKeyboardBuilder()
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=happ_text, url=happ_url)],
-            [InlineKeyboardButton(text=home_text, callback_data="back_home")],
-        ]
+    builder.button(
+        text="🔗 Add configuration to Happ"
+        if lang == "en"
+        else "🔗 Добавить конфигурацию в Happ",
+        url=happ_url,
+        style="primary",
     )
+    builder.button(
+        text="🏠 Home" if lang == "en" else "🏠 На главную",
+        callback_data="back_home",
+    )
+
+    builder.adjust(1, 1)
+    return builder.as_markup()
 
 
 async def ensure_access_before_subscription_link(telegram_id: int) -> tuple[bool, str]:

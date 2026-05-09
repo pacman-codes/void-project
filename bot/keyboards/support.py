@@ -6,8 +6,6 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.keyboards.home import get_primary_cta_text
-
 from utils.buttons import (
     INSTRUCTION_EN,
     INSTRUCTION_RU,
@@ -39,22 +37,8 @@ def get_support_inline_keyboard(
     builder = InlineKeyboardBuilder()
 
     builder.button(
-        text=get_primary_cta_text(lang, access_type),
-        callback_data="open_renew" if _is_paid(access_type) else "open_subscription",
-        style="success",
-    )
-
-    if _is_paid(access_type):
-        builder.button(
-            text="🔑 Devices" if lang == "en" else "🔑 Устройства",
-            callback_data="open_add_device",
-            style="primary",
-        )
-
-    builder.button(
-        text="🔄 Refresh key" if lang == "en" else "🔄 Обновить ключ",
-        callback_data="regenerate_key",
-        style="primary",
+        text="💬 Contact support" if lang == "en" else "💬 Написать в поддержку",
+        url=SUPPORT_URL,
     )
     builder.button(
         text="📘 Instruction" if lang == "en" else "📘 Инструкция",
@@ -69,9 +53,5 @@ def get_support_inline_keyboard(
         callback_data="back_home",
     )
 
-    if _is_paid(access_type):
-        builder.adjust(1, 1, 1, 2, 1)
-    else:
-        builder.adjust(1, 1, 2, 1)
-
+    builder.adjust(1, 1, 2)
     return builder.as_markup()

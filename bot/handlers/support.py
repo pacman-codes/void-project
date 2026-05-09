@@ -19,14 +19,18 @@ def build_support_text(lang: str) -> str:
     if lang == "en":
         return (
             "💬 <b>Not working?</b>\n\n"
-            "Try refreshing your key first. If it still does not work,\n"
-            f"write here: {SUPPORT_USERNAME}"
+            "1. Open the instruction and check the setup steps.\n"
+            "2. Open the subscription link screen and add the configuration to Happ again.\n"
+            "3. Restart Happ and try connecting one more time.\n\n"
+            f"If it still does not work, contact support: {SUPPORT_USERNAME}"
         )
 
     return (
         "💬 <b>Не работает?</b>\n\n"
-        "Сначала попробуйте обновить ключ. Если проблема останется,\n"
-        f"напишите сюда: {SUPPORT_USERNAME}"
+        "1. Откройте инструкцию и проверьте шаги подключения.\n"
+        "2. Откройте экран «Подписочная ссылка» и добавьте конфигурацию в Happ заново.\n"
+        "3. Перезапустите Happ и попробуйте подключиться ещё раз.\n\n"
+        f"Если проблема останется, напишите в поддержку: {SUPPORT_USERNAME}"
     )
 
 

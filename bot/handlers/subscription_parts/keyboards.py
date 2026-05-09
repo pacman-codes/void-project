@@ -60,16 +60,11 @@ def build_devices_keyboard(
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
-    if access_type in {"free", "paid"}:
-        builder.button(
-            text="🔗 Subscription link" if lang == "en" else "🔗 Подписочная ссылка",
-            callback_data="open_subscription_link",
-        )
-
     if access_type == "paid":
         builder.button(
             text="🔑 Add device" if lang == "en" else "🔑 Добавить устройство",
             callback_data="open_extra_device_offer",
+            style="primary",
         )
     else:
         builder.button(
