@@ -21,6 +21,7 @@ from services.traffic_service import (
     sync_user_traffic_from_panel,
 )
 from services.legacy_migration_service import (
+    collect_legacy_migration_candidates,
     get_legacy_migration_snapshot,
     notify_legacy_migration_batch,
     notify_legacy_migration_user,
@@ -817,6 +818,62 @@ def parse_optional_limit(message: Message, default: int = 50) -> int:
 
 
 
+
+
+
+def build_legacy_list_text(items: list[dict]) -> str:
+    lines = [
+        "🧭 <b>Legacy candidates</b>",
+        "",
+        f"found: <code>{len(items)}</code>",
+        "",
+    ]
+
+    if not items:
+        lines.append("Кандидатов нет.")
+        return "\n".join(lines)
+
+    for item in items[:50]:
+        lines.extend(
+            [
+                f"• telegram_id: <code>{h(item.get('telegram_id'))}</code>",
+                f"  user_id: <code>{h(item.get('user_id'))}</code>",
+                f"  access_type: <code>{h(item.get('access_type'))}</code>",
+                f"  category: <code>{h(item.get('category'))}</code>",
+                f"  should_notify: <code>{h(item.get('should_notify'))}</code>",
+                f"  already_notified: <code>{h(item.get('already_notified'))}</code>",
+                f"  legacy_clients: <code>{h(item.get('legacy_panel_client_count'))}</code>",
+                "",
+            ]
+        )
+
+    text = "\n".join(lines).strip()
+    if len(text) > 3900:
+        text = text[:3800].rstrip() + "\n\n...truncated"
+
+    return text
+
+
+@router.message(F.text.regexp(r"^/adminLegacyList(?:@\w+)?(?:\s|$)"))
+async def admin_legacy_list_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        limit = parse_optional_limit(message, default=50)
+    except ValueError:
+        await message.answer("Формат: /adminLegacyList [limit]")
+        return
+
+    try:
+        telegram_ids = await collect_legacy_migration_candidates(limit=limit)
+        snapshots = []
+        for telegram_id in telegram_ids:
+            snapshots.append(await get_legacy_migration_snapshot(telegram_id))
+
+        await message.answer(build_legacy_list_text(snapshots), parse_mode="HTML")
+    except Exception as exc:
+        await message.answer(f"Ошибка adminLegacyList: {type(exc).__name__}: {html.escape(str(exc))}")
 
 
 def build_legacy_migration_text(snapshot: dict | None) -> str:
