@@ -14,6 +14,11 @@ from db.models import User, UserSubscriptionLink, VPNAccess
 from services.vpn_service import VPNService, VPNServiceError
 from services.audit_log_service import get_recent_user_events, log_user_event
 from services.expiry_service import expire_paid_users_once
+from services.traffic_service import (
+    get_user_traffic_snapshot,
+    reset_user_traffic,
+    set_user_traffic_used,
+)
 
 router = Router()
 
@@ -627,6 +632,13 @@ def build_admin_help_text() -> str:
         "Предпросмотр cleanup без удаления.\n\n"
         "/adminClean [telegram_id]\n"
         "Отключить DB-доступы/subscription links и почистить panel clients.\n\n"
+        "<b>Traffic</b>\n"
+        "/adminTraffic [telegram_id]\n"
+        "Показать free-трафик пользователя.\n\n"
+        "/adminTrafficSet [telegram_id] [used_mb]\n"
+        "Вручную установить использованный free-трафик.\n\n"
+        "/adminTrafficReset [telegram_id]\n"
+        "Сбросить использованный free-трафик.\n\n"
         "<b>Expiry</b>\n"
         "/adminExpireCheck [limit]\n"
         "Проверить истёкшие paid без изменений.\n\n"
@@ -688,29 +700,32 @@ def build_admin_events_text(telegram_id: int, events: list) -> str:
         "",
     ]
 
+    max_total_len = 3600
+
     for event in events:
         details = event.details_json or "-"
-        if len(details) > 180:
-            details = details[:180].rstrip() + "..."
+        if len(details) > 140:
+            details = details[:140].rstrip() + "..."
 
-        lines.extend(
-            [
-                f"• <code>{format_dt(event.created_at)}</code>",
-                f"  type: <code>{h(event.event_type)}</code>",
-                f"  status: <code>{h(event.status)}</code>",
-                f"  actor: <code>{h(event.actor_telegram_id)}</code>",
-                f"  source: <code>{h(event.source)}</code>",
-                f"  message: <code>{h(event.message)}</code>",
-                f"  details: <code>{h(details)}</code>",
-                "",
-            ]
-        )
+        item_lines = [
+            f"• <code>{format_dt(event.created_at)}</code>",
+            f"  type: <code>{h(event.event_type)}</code>",
+            f"  status: <code>{h(event.status)}</code>",
+            f"  actor: <code>{h(event.actor_telegram_id)}</code>",
+            f"  source: <code>{h(event.source)}</code>",
+            f"  message: <code>{h(event.message)}</code>",
+            f"  details: <code>{h(details)}</code>",
+            "",
+        ]
 
-    text = "\n".join(lines).strip()
-    if len(text) > 3900:
-        text = text[:3800].rstrip() + "\n\n...truncated"
+        candidate = "\n".join(lines + item_lines).strip()
+        if len(candidate) > max_total_len:
+            lines.append("...truncated")
+            break
 
-    return text
+        lines.extend(item_lines)
+
+    return "\n".join(lines).strip()
 
 
 @router.message(F.text.regexp(r"^/adminEvents(?:@\w+)?(?:\s|$)"))
@@ -792,6 +807,101 @@ def parse_optional_limit(message: Message, default: int = 50) -> int:
     if not args:
         return default
     return max(1, min(int(args[0]), 200))
+
+
+
+
+def build_admin_traffic_text(snapshot: dict | None) -> str:
+    if snapshot is None:
+        return "Пользователь не найден"
+
+    return (
+        "📊 <b>Free traffic</b>\n\n"
+        f"telegram_id: <code>{h(snapshot.get('telegram_id'))}</code>\n"
+        f"user_id: <code>{h(snapshot.get('user_id'))}</code>\n"
+        f"access_type: <code>{h(snapshot.get('access_type'))}</code>\n\n"
+        f"used: <code>{h(snapshot.get('traffic_used_mb'))} MB</code> "
+        f"(<code>{h(snapshot.get('traffic_used_gb'))} GB</code>)\n"
+        f"limit: <code>{h(snapshot.get('traffic_limit_mb'))} MB</code> "
+        f"(<code>{h(snapshot.get('traffic_limit_gb'))} GB</code>)\n"
+        f"left: <code>{h(snapshot.get('traffic_left_mb'))} MB</code> "
+        f"(<code>{h(snapshot.get('traffic_left_gb'))} GB</code>)\n"
+        f"used percent: <code>{h(snapshot.get('percent_used'))}%</code>\n"
+        f"limit reached: <code>{h(snapshot.get('limit_reached'))}</code>"
+    )
+
+
+@router.message(F.text.regexp(r"^/adminTraffic(?:@\w+)?(?:\s|$)"))
+async def admin_traffic_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        target_id = parse_target(message)
+    except ValueError:
+        await message.answer("Формат: /adminTraffic [telegram_id]")
+        return
+
+    try:
+        snapshot = await get_user_traffic_snapshot(target_id)
+        await message.answer(build_admin_traffic_text(snapshot), parse_mode="HTML")
+    except Exception as exc:
+        await message.answer(f"Ошибка adminTraffic: {type(exc).__name__}: {html.escape(str(exc))}")
+
+
+@router.message(F.text.regexp(r"^/adminTrafficSet(?:@\w+)?(?:\s|$)"))
+async def admin_traffic_set_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        args = parse_admin_args(message)
+        if len(args) == 1:
+            if not message.from_user:
+                await message.answer("Формат: /adminTrafficSet [telegram_id] [used_mb]")
+                return
+            target_id = message.from_user.id
+            used_mb = int(args[0])
+        elif len(args) >= 2:
+            target_id = int(args[0])
+            used_mb = int(args[1])
+        else:
+            await message.answer("Формат: /adminTrafficSet [telegram_id] [used_mb]")
+            return
+    except ValueError:
+        await message.answer("Формат: /adminTrafficSet [telegram_id] [used_mb]")
+        return
+
+    try:
+        snapshot = await set_user_traffic_used(
+            target_id,
+            used_mb,
+            actor_telegram_id=message.from_user.id if message.from_user else None,
+        )
+        await message.answer(build_admin_traffic_text(snapshot), parse_mode="HTML")
+    except Exception as exc:
+        await message.answer(f"Ошибка adminTrafficSet: {type(exc).__name__}: {html.escape(str(exc))}")
+
+
+@router.message(F.text.regexp(r"^/adminTrafficReset(?:@\w+)?(?:\s|$)"))
+async def admin_traffic_reset_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        target_id = parse_target(message)
+    except ValueError:
+        await message.answer("Формат: /adminTrafficReset [telegram_id]")
+        return
+
+    try:
+        snapshot = await reset_user_traffic(
+            target_id,
+            actor_telegram_id=message.from_user.id if message.from_user else None,
+        )
+        await message.answer(build_admin_traffic_text(snapshot), parse_mode="HTML")
+    except Exception as exc:
+        await message.answer(f"Ошибка adminTrafficReset: {type(exc).__name__}: {html.escape(str(exc))}")
 
 
 @router.message(F.text.regexp(r"^/adminExpireCheck(?:@\w+)?(?:\s|$)"))
