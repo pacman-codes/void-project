@@ -20,6 +20,11 @@ from services.traffic_service import (
     set_user_traffic_used,
     sync_user_traffic_from_panel,
 )
+from services.legacy_migration_service import (
+    get_legacy_migration_snapshot,
+    notify_legacy_migration_batch,
+    notify_legacy_migration_user,
+)
 
 router = Router()
 
@@ -810,6 +815,180 @@ def parse_optional_limit(message: Message, default: int = 50) -> int:
     return max(1, min(int(args[0]), 200))
 
 
+
+
+
+
+def build_legacy_migration_text(snapshot: dict | None) -> str:
+    if snapshot is None:
+        return "Пользователь не найден"
+
+    if not snapshot.get("user_found"):
+        return f"🧭 <b>Legacy migration</b>\n\ntelegram_id: <code>{h(snapshot.get('telegram_id'))}</code>\nПользователь не найден."
+
+    lines = [
+        "🧭 <b>Legacy migration</b>",
+        "",
+        f"telegram_id: <code>{h(snapshot.get('telegram_id'))}</code>",
+        f"user_id: <code>{h(snapshot.get('user_id'))}</code>",
+        f"access_type: <code>{h(snapshot.get('access_type'))}</code>",
+        f"is_active: <code>{h(snapshot.get('is_active'))}</code>",
+        "",
+        f"category: <code>{h(snapshot.get('category'))}</code>",
+        f"should_notify: <code>{h(snapshot.get('should_notify'))}</code>",
+        f"already_notified: <code>{h(snapshot.get('already_notified'))}</code>",
+        f"grace_days: <code>{h(snapshot.get('legacy_grace_days'))}</code>",
+        f"disable_after: <code>{h(snapshot.get('legacy_disable_after'))}</code>",
+        "",
+        f"active DB access: <code>{h(snapshot.get('active_db_access_count'))}</code>",
+        f"panel clients by tgId: <code>{h(snapshot.get('panel_client_count'))}</code>",
+        f"current panel clients: <code>{h(snapshot.get('current_panel_client_count'))}</code>",
+        f"legacy panel clients: <code>{h(snapshot.get('legacy_panel_client_count'))}</code>",
+        "",
+    ]
+
+    legacy_clients = snapshot.get("legacy_clients") or []
+    if legacy_clients:
+        lines.append("<b>Legacy clients:</b>")
+        for item in legacy_clients[:10]:
+            lines.extend(
+                [
+                    f"• email: <code>{h(item.get('email'))}</code>",
+                    f"  uuid: <code>{h(item.get('uuid'))}</code>",
+                    f"  enable: <code>{h(item.get('enable'))}</code>",
+                    "",
+                ]
+            )
+
+    current_clients = snapshot.get("current_clients") or []
+    if current_clients:
+        lines.append("<b>Current clients:</b>")
+        for item in current_clients[:10]:
+            lines.extend(
+                [
+                    f"• email: <code>{h(item.get('email'))}</code>",
+                    f"  uuid: <code>{h(item.get('uuid'))}</code>",
+                    f"  enable: <code>{h(item.get('enable'))}</code>",
+                    "",
+                ]
+            )
+
+    text = "\n".join(lines).strip()
+    if len(text) > 3900:
+        text = text[:3800].rstrip() + "\n\n...truncated"
+
+    return text
+
+
+def build_legacy_notify_result_text(result: dict | None) -> str:
+    if result is None:
+        return "Пользователь не найден"
+
+    return (
+        "🧭 <b>Legacy notify</b>\n\n"
+        f"telegram_id: <code>{h(result.get('telegram_id'))}</code>\n"
+        f"status: <code>{h(result.get('status'))}</code>\n"
+        f"sent: <code>{h(result.get('sent'))}</code>\n"
+        f"category: <code>{h(result.get('category'))}</code>\n"
+        f"message: <code>{h(result.get('message'))}</code>"
+    )
+
+
+def build_legacy_notify_all_text(result: dict) -> str:
+    lines = [
+        "🧭 <b>Legacy notify all</b>",
+        "",
+        f"checked_at: <code>{h(result.get('checked_at'))}</code>",
+        f"limit: <code>{h(result.get('limit'))}</code>",
+        f"found: <code>{h(result.get('found'))}</code>",
+        f"processed: <code>{h(result.get('processed'))}</code>",
+        f"sent: <code>{h(result.get('sent'))}</code>",
+        f"skipped: <code>{h(result.get('skipped'))}</code>",
+        "",
+    ]
+
+    for item in (result.get("results") or [])[:20]:
+        lines.extend(
+            [
+                f"• telegram_id: <code>{h(item.get('telegram_id'))}</code>",
+                f"  status: <code>{h(item.get('status'))}</code>",
+                f"  sent: <code>{h(item.get('sent'))}</code>",
+                f"  category: <code>{h(item.get('category'))}</code>",
+                f"  legacy_clients: <code>{h(item.get('legacy_panel_client_count'))}</code>",
+                "",
+            ]
+        )
+
+    text = "\n".join(lines).strip()
+    if len(text) > 3900:
+        text = text[:3800].rstrip() + "\n\n...truncated"
+
+    return text
+
+
+@router.message(F.text.regexp(r"^/adminLegacyCheck(?:@\w+)?(?:\s|$)"))
+async def admin_legacy_check_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        target_id = parse_target(message)
+    except ValueError:
+        await message.answer("Формат: /adminLegacyCheck [telegram_id]")
+        return
+
+    try:
+        snapshot = await get_legacy_migration_snapshot(target_id)
+        await message.answer(build_legacy_migration_text(snapshot), parse_mode="HTML")
+    except Exception as exc:
+        await message.answer(f"Ошибка adminLegacyCheck: {type(exc).__name__}: {html.escape(str(exc))}")
+
+
+@router.message(F.text.regexp(r"^/adminLegacyNotify(?:@\w+)?(?:\s|$)"))
+async def admin_legacy_notify_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        target_id = parse_target(message)
+    except ValueError:
+        await message.answer("Формат: /adminLegacyNotify [telegram_id]")
+        return
+
+    try:
+        result = await notify_legacy_migration_user(
+            target_id,
+            bot=message.bot,
+            actor_telegram_id=message.from_user.id if message.from_user else None,
+            source="admin_legacy_notify",
+            force=True,
+        )
+        await message.answer(build_legacy_notify_result_text(result), parse_mode="HTML")
+    except Exception as exc:
+        await message.answer(f"Ошибка adminLegacyNotify: {type(exc).__name__}: {html.escape(str(exc))}")
+
+
+@router.message(F.text.regexp(r"^/adminLegacyNotifyAll(?:@\w+)?(?:\s|$)"))
+async def admin_legacy_notify_all_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        limit = parse_optional_limit(message, default=50)
+    except ValueError:
+        await message.answer("Формат: /adminLegacyNotifyAll [limit]")
+        return
+
+    try:
+        result = await notify_legacy_migration_batch(
+            bot=message.bot,
+            limit=limit,
+            actor_telegram_id=message.from_user.id if message.from_user else None,
+            source="admin_legacy_notify_all",
+        )
+        await message.answer(build_legacy_notify_all_text(result), parse_mode="HTML")
+    except Exception as exc:
+        await message.answer(f"Ошибка adminLegacyNotifyAll: {type(exc).__name__}: {html.escape(str(exc))}")
 
 
 def build_admin_traffic_text(snapshot: dict | None) -> str:
