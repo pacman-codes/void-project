@@ -1406,3 +1406,55 @@ async def admin_reset(message: Message) -> None:
         "DB-доступы и подписочные ссылки отключены. "
         "Panel cleanup сделаем отдельной безопасной командой позже."
     )
+
+
+@router.message(F.text.regexp(r"^/adminLegacyList(?:@\w+)?(?:\s|$)"))
+async def admin_legacy_list_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        limit = parse_optional_limit(message, default=50)
+    except ValueError:
+        await message.answer("Формат: /adminLegacyList [limit]")
+        return
+
+    try:
+        telegram_ids = await collect_legacy_migration_candidates(limit=limit)
+        snapshots = []
+
+        for telegram_id in telegram_ids:
+            snapshots.append(await get_legacy_migration_snapshot(telegram_id))
+
+        lines = [
+            "🧭 Legacy candidates",
+            "",
+            f"found: {len(snapshots)}",
+            "",
+        ]
+
+        if not snapshots:
+            lines.append("Кандидатов нет.")
+
+        for item in snapshots:
+            block = [
+                f"• telegram_id: {item.get('telegram_id')}",
+                f"  user_id: {item.get('user_id')}",
+                f"  access_type: {item.get('access_type')}",
+                f"  category: {item.get('category')}",
+                f"  should_notify: {item.get('should_notify')}",
+                f"  already_notified: {item.get('already_notified')}",
+                f"  legacy_clients: {item.get('legacy_panel_client_count')}",
+                "",
+            ]
+
+            candidate_text = "\n".join(lines + block).strip()
+            if len(candidate_text) > 3600:
+                lines.append("...truncated")
+                break
+
+            lines.extend(block)
+
+        await message.answer("\n".join(lines).strip())
+    except Exception as exc:
+        await message.answer(f"Ошибка adminLegacyList: {type(exc).__name__}: {html.escape(str(exc))}")
