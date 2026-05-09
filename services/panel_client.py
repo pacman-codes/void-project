@@ -5,6 +5,7 @@ import secrets
 import string
 from dataclasses import asdict, dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -322,6 +323,62 @@ class PanelClient:
                 return asdict(client)
 
         return None
+
+    async def get_client_traffic_by_email(self, email: str) -> dict[str, Any]:
+        if not email:
+            raise PanelRequestError("email пустой, получить traffic невозможно")
+
+        client = await self.login()
+        try:
+            data = await self._request_json(
+                client,
+                "GET",
+                f"/panel/api/inbounds/getClientTraffics/{quote(email, safe='')}",
+            )
+        finally:
+            await client.aclose()
+
+        if not data.get("success"):
+            raise PanelRequestError(
+                f"Панель вернула success=false при getClientTraffics для {email}: {data}"
+            )
+
+        obj = data.get("obj")
+        if not isinstance(obj, dict):
+            raise PanelRequestError(
+                f"Поле obj отсутствует или не dict при getClientTraffics для {email}: {data}"
+            )
+
+        return obj
+
+    async def get_client_traffic_by_uuid(self, client_uuid: str) -> list[dict[str, Any]]:
+        if not client_uuid:
+            raise PanelRequestError("client_uuid пустой, получить traffic невозможно")
+
+        client = await self.login()
+        try:
+            data = await self._request_json(
+                client,
+                "GET",
+                f"/panel/api/inbounds/getClientTrafficsById/{quote(client_uuid, safe='')}",
+            )
+        finally:
+            await client.aclose()
+
+        if not data.get("success"):
+            raise PanelRequestError(
+                f"Панель вернула success=false при getClientTrafficsById для {client_uuid}: {data}"
+            )
+
+        obj = data.get("obj")
+        if isinstance(obj, list):
+            return [item for item in obj if isinstance(item, dict)]
+
+        if isinstance(obj, dict):
+            return [obj]
+
+        return []
+
 
     async def add_client(
         self,

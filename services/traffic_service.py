@@ -134,6 +134,197 @@ async def get_user_traffic_snapshot(telegram_id: int) -> dict[str, Any] | None:
         return build_traffic_snapshot(user)
 
 
+def _mask(value: object | None, keep_start: int = 6, keep_end: int = 4) -> str:
+    if value is None:
+        return "-"
+
+    raw = str(value)
+    if not raw:
+        return "-"
+
+    if len(raw) <= keep_start + keep_end + 3:
+        return raw
+
+    return f"{raw[:keep_start]}...{raw[-keep_end:]}"
+
+
+def _to_int(value: object | None) -> int:
+    if value is None:
+        return 0
+
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _bytes_to_mb(value: int) -> int:
+    return max(0, int(value) // (1024 * 1024))
+
+
+async def collect_user_panel_traffic(telegram_id: int) -> dict[str, Any] | None:
+    async with async_session_maker() as session:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        user = user_result.scalar_one_or_none()
+
+        if user is None:
+            return None
+
+        access_result = await session.execute(
+            select(VPNAccess)
+            .where(
+                VPNAccess.user_id == user.id,
+                VPNAccess.is_active.is_(True),
+            )
+            .order_by(VPNAccess.device_number.asc(), VPNAccess.id.asc())
+        )
+        accesses = list(access_result.scalars().all())
+        db_snapshot = build_traffic_snapshot(user)
+
+    service = VPNService()
+    panel = service._get_panel_client()
+
+    records: list[dict[str, Any]] = []
+    errors: list[str] = []
+    total_bytes = 0
+
+    for access in accesses:
+        label = f"access_id={access.id}, device={access.device_number}, external_id={_mask(access.external_id)}"
+
+        if not access.external_id:
+            errors.append(label + " — no external_id")
+            continue
+
+        try:
+            stat = await panel.get_client_traffic_by_email(access.external_id)
+        except Exception as exc:
+            errors.append(label + f" — {type(exc).__name__}: {exc}")
+            continue
+
+        up_bytes = _to_int(stat.get("up"))
+        down_bytes = _to_int(stat.get("down"))
+        all_time_bytes = _to_int(stat.get("allTime"))
+        current_total_bytes = up_bytes + down_bytes
+
+        total_bytes += current_total_bytes
+
+        records.append(
+            {
+                "access_id": access.id,
+                "device_number": access.device_number,
+                "external_id": _mask(access.external_id),
+                "client_uuid": _mask(access.client_uuid),
+                "panel_email": _mask(stat.get("email")),
+                "panel_uuid": _mask(stat.get("uuid")),
+                "enable": bool(stat.get("enable")),
+                "up_bytes": up_bytes,
+                "down_bytes": down_bytes,
+                "all_time_bytes": all_time_bytes,
+                "total_bytes": current_total_bytes,
+                "total_mb": _bytes_to_mb(current_total_bytes),
+                "last_online": _to_int(stat.get("lastOnline")),
+            }
+        )
+
+    return {
+        "telegram_id": telegram_id,
+        "db_snapshot": db_snapshot,
+        "records": records,
+        "errors": errors,
+        "active_access_count": len(accesses),
+        "synced_access_count": len(records),
+        "total_bytes": total_bytes,
+        "total_mb": _bytes_to_mb(total_bytes),
+        "total_gb": round(total_bytes / 1024 / 1024 / 1024, 2),
+    }
+
+
+async def sync_user_traffic_from_panel(
+    telegram_id: int,
+    *,
+    actor_telegram_id: int | None = None,
+    source: str = "panel_sync",
+) -> dict[str, Any] | None:
+    panel_snapshot = await collect_user_panel_traffic(telegram_id)
+
+    if panel_snapshot is None:
+        return None
+
+    db_snapshot = panel_snapshot["db_snapshot"]
+    old_used_mb = int(db_snapshot.get("traffic_used_mb") or 0)
+    new_used_mb = int(panel_snapshot.get("total_mb") or 0)
+
+    if panel_snapshot["errors"]:
+        await log_user_event(
+            event_type="traffic_panel_sync_failed",
+            target_telegram_id=telegram_id,
+            actor_telegram_id=actor_telegram_id,
+            source=source,
+            status="error",
+            message="Panel traffic sync failed",
+            details=panel_snapshot,
+        )
+
+        return {
+            "status": "error",
+            "updated": False,
+            "snapshot": db_snapshot,
+            "panel": panel_snapshot,
+        }
+
+    if new_used_mb == old_used_mb:
+        await log_user_event(
+            event_type="traffic_panel_synced",
+            target_telegram_id=telegram_id,
+            actor_telegram_id=actor_telegram_id,
+            source=source,
+            status="ok",
+            message="Panel traffic synced without DB changes",
+            details={
+                "old_used_mb": old_used_mb,
+                "new_used_mb": new_used_mb,
+                "panel": panel_snapshot,
+            },
+        )
+
+        return {
+            "status": "ok",
+            "updated": False,
+            "snapshot": db_snapshot,
+            "panel": panel_snapshot,
+        }
+
+    updated_snapshot = await set_user_traffic_used(
+        telegram_id,
+        new_used_mb,
+        actor_telegram_id=actor_telegram_id,
+        source=source,
+    )
+
+    await log_user_event(
+        event_type="traffic_panel_synced",
+        target_telegram_id=telegram_id,
+        actor_telegram_id=actor_telegram_id,
+        source=source,
+        status="ok",
+        message="Panel traffic synced and DB updated",
+        details={
+            "old_used_mb": old_used_mb,
+            "new_used_mb": new_used_mb,
+            "panel": panel_snapshot,
+        },
+    )
+
+    return {
+        "status": "ok",
+        "updated": True,
+        "snapshot": updated_snapshot,
+        "panel": panel_snapshot,
+    }
+
+
 async def _notify_admins_paid_overuse(snapshot: dict[str, Any], source: str) -> None:
     admin_ids = _get_admin_ids()
     if not admin_ids:

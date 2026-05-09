@@ -18,6 +18,7 @@ from services.traffic_service import (
     get_user_traffic_snapshot,
     reset_user_traffic,
     set_user_traffic_used,
+    sync_user_traffic_from_panel,
 )
 
 router = Router()
@@ -878,6 +879,78 @@ async def admin_traffic_command(message: Message) -> None:
         await message.answer(build_admin_traffic_text(snapshot), parse_mode="HTML")
     except Exception as exc:
         await message.answer(f"Ошибка adminTraffic: {type(exc).__name__}: {html.escape(str(exc))}")
+
+
+def build_admin_traffic_sync_text(result: dict | None) -> str:
+    if result is None:
+        return "Пользователь не найден"
+
+    snapshot = result.get("snapshot")
+    panel = result.get("panel") or {}
+
+    lines = [
+        build_admin_traffic_text(snapshot),
+        "",
+        "🔄 <b>Panel sync</b>",
+        "",
+        f"status: <code>{h(result.get('status'))}</code>",
+        f"updated: <code>{h(result.get('updated'))}</code>",
+        f"active access records: <code>{h(panel.get('active_access_count'))}</code>",
+        f"synced records: <code>{h(panel.get('synced_access_count'))}</code>",
+        f"panel total: <code>{h(panel.get('total_mb'))} MB</code> "
+        f"(<code>{h(panel.get('total_gb'))} GB</code>)",
+        "",
+    ]
+
+    records = panel.get("records") or []
+    if records:
+        lines.append("<b>Records:</b>")
+        for item in records[:10]:
+            lines.extend(
+                [
+                    f"• access_id: <code>{h(item.get('access_id'))}</code>",
+                    f"  device: <code>{h(item.get('device_number'))}</code>",
+                    f"  external_id: <code>{h(item.get('external_id'))}</code>",
+                    f"  up: <code>{h(item.get('up_bytes'))}</code>",
+                    f"  down: <code>{h(item.get('down_bytes'))}</code>",
+                    f"  total_mb: <code>{h(item.get('total_mb'))}</code>",
+                    "",
+                ]
+            )
+
+    errors = panel.get("errors") or []
+    if errors:
+        lines.append("<b>Errors:</b>")
+        for item in errors[:10]:
+            lines.append(f"• <code>{h(item)}</code>")
+
+    text = "\n".join(lines).strip()
+    if len(text) > 3900:
+        text = text[:3800].rstrip() + "\n\n...truncated"
+
+    return text
+
+
+@router.message(F.text.regexp(r"^/adminTrafficSync(?:@\w+)?(?:\s|$)"))
+async def admin_traffic_sync_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        target_id = parse_target(message)
+    except ValueError:
+        await message.answer("Формат: /adminTrafficSync [telegram_id]")
+        return
+
+    try:
+        result = await sync_user_traffic_from_panel(
+            target_id,
+            actor_telegram_id=message.from_user.id if message.from_user else None,
+            source="admin_traffic_sync",
+        )
+        await message.answer(build_admin_traffic_sync_text(result), parse_mode="HTML")
+    except Exception as exc:
+        await message.answer(f"Ошибка adminTrafficSync: {type(exc).__name__}: {html.escape(str(exc))}")
 
 
 @router.message(F.text.regexp(r"^/adminTrafficSet(?:@\w+)?(?:\s|$)"))
