@@ -11,6 +11,7 @@ from db.models import User, UserSubscriptionLink, VPNAccess
 
 
 RAW_KEY_GRACE_DAYS = 5
+DEFAULT_FREE_TRAFFIC_LIMIT_MB = 3072
 
 
 class SubscriptionLinkError(Exception):
@@ -27,7 +28,9 @@ def _make_token() -> str:
 
 def _user_has_active_access(user: User) -> bool:
     if user.access_type == "free":
-        return True
+        traffic_used = max(int(user.traffic_used or 0), 0)
+        traffic_limit = int(user.traffic_limit or DEFAULT_FREE_TRAFFIC_LIMIT_MB)
+        return bool(user.is_active) and traffic_used < traffic_limit
 
     if user.access_type == "paid":
         return bool(user.subscription_expiry and user.subscription_expiry > _now())

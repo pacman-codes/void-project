@@ -1,17 +1,65 @@
 from __future__ import annotations
 
+import html
+import os
 from typing import Any
 
+from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from sqlalchemy import select
 
+from config.config import settings
+from config.runtime import DEV_MODE
 from db.database import async_session_maker
-from db.models import User
+from db.models import User, VPNAccess
 from services.audit_log_service import log_user_event
+from services.vpn_service import VPNService
 
 DEFAULT_FREE_TRAFFIC_LIMIT_MB = 3072
+DEFAULT_PAID_OVERUSE_NOTIFY_MB = 153600  # 150 GB
 
 
-def _normalize_limit(value: int | None) -> int:
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name)
+
+    if raw is None:
+        return default
+
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+
+    return max(minimum, min(value, maximum))
+
+
+def _get_paid_overuse_notify_mb() -> int:
+    return _env_int(
+        "PAID_TRAFFIC_OVERUSE_NOTIFY_MB",
+        default=DEFAULT_PAID_OVERUSE_NOTIFY_MB,
+        minimum=1024,
+        maximum=10 * 1024 * 1024,
+    )
+
+
+def _get_admin_ids() -> set[int]:
+    raw = os.getenv("ADMIN_TELEGRAM_IDS", "")
+    result: set[int] = set()
+
+    for item in raw.replace(";", ",").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            result.add(int(item))
+        except ValueError:
+            continue
+
+    return result
+
+
+def _normalize_free_limit(value: int | None) -> int:
     if value is None or value <= 0:
         return DEFAULT_FREE_TRAFFIC_LIMIT_MB
     return int(value)
@@ -25,22 +73,37 @@ def _normalize_used(value: int | None) -> int:
 
 def build_traffic_snapshot(user: User) -> dict[str, Any]:
     used_mb = _normalize_used(user.traffic_used)
-    limit_mb = _normalize_limit(user.traffic_limit)
-    left_mb = max(limit_mb - used_mb, 0)
-    percent_used = round((used_mb / limit_mb) * 100, 2) if limit_mb > 0 else 0
+    free_limit_mb = _normalize_free_limit(user.traffic_limit)
+    paid_overuse_notify_mb = _get_paid_overuse_notify_mb()
+
+    free_left_mb = max(free_limit_mb - used_mb, 0)
+    free_percent_used = round((used_mb / free_limit_mb) * 100, 2) if free_limit_mb > 0 else 0
+    paid_threshold_percent = (
+        round((used_mb / paid_overuse_notify_mb) * 100, 2)
+        if paid_overuse_notify_mb > 0
+        else 0
+    )
 
     return {
         "user_id": user.id,
         "telegram_id": user.telegram_id,
         "access_type": user.access_type,
+        "is_active": user.is_active,
+
         "traffic_used_mb": used_mb,
-        "traffic_limit_mb": limit_mb,
-        "traffic_left_mb": left_mb,
         "traffic_used_gb": round(used_mb / 1024, 2),
-        "traffic_limit_gb": round(limit_mb / 1024, 2),
-        "traffic_left_gb": round(left_mb / 1024, 2),
-        "percent_used": percent_used,
-        "limit_reached": used_mb >= limit_mb,
+
+        "free_limit_mb": free_limit_mb,
+        "free_limit_gb": round(free_limit_mb / 1024, 2),
+        "free_left_mb": free_left_mb,
+        "free_left_gb": round(free_left_mb / 1024, 2),
+        "free_percent_used": free_percent_used,
+        "free_limit_reached": user.access_type == "free" and used_mb >= free_limit_mb,
+
+        "paid_overuse_notify_mb": paid_overuse_notify_mb,
+        "paid_overuse_notify_gb": round(paid_overuse_notify_mb / 1024, 2),
+        "paid_threshold_percent": paid_threshold_percent,
+        "paid_overuse_reached": user.access_type == "paid" and used_mb >= paid_overuse_notify_mb,
     }
 
 
@@ -71,6 +134,163 @@ async def get_user_traffic_snapshot(telegram_id: int) -> dict[str, Any] | None:
         return build_traffic_snapshot(user)
 
 
+async def _notify_admins_paid_overuse(snapshot: dict[str, Any], source: str) -> None:
+    admin_ids = _get_admin_ids()
+    if not admin_ids:
+        return
+
+    text = (
+        "⚠️ <b>Paid traffic overuse</b>\n\n"
+        f"telegram_id: <code>{html.escape(str(snapshot.get('telegram_id')))}</code>\n"
+        f"user_id: <code>{html.escape(str(snapshot.get('user_id')))}</code>\n"
+        f"used: <code>{html.escape(str(snapshot.get('traffic_used_gb')))} GB</code>\n"
+        f"threshold: <code>{html.escape(str(snapshot.get('paid_overuse_notify_gb')))} GB</code>\n"
+        f"source: <code>{html.escape(source)}</code>"
+    )
+
+    bot = Bot(
+        token=settings.BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+
+    notified: list[int] = []
+    failed: list[str] = []
+
+    try:
+        for admin_id in admin_ids:
+            try:
+                await bot.send_message(admin_id, text)
+                notified.append(admin_id)
+            except Exception as exc:
+                failed.append(f"{admin_id}: {type(exc).__name__}: {exc}")
+    finally:
+        await bot.session.close()
+
+    await log_user_event(
+        event_type="traffic_paid_overuse_owner_notified",
+        target_telegram_id=int(snapshot["telegram_id"]),
+        source=source,
+        status="ok" if notified else "error",
+        message="Owner notification sent for paid traffic overuse",
+        details={
+            "notified": notified,
+            "failed": failed,
+            "snapshot": snapshot,
+        },
+    )
+
+
+async def _disable_free_access_due_to_limit(
+    telegram_id: int,
+    *,
+    actor_telegram_id: int | None,
+    source: str,
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    async with async_session_maker() as session:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        user = user_result.scalar_one_or_none()
+
+        if user is None:
+            return snapshot
+
+        access_result = await session.execute(
+            select(VPNAccess)
+            .where(
+                VPNAccess.user_id == user.id,
+                VPNAccess.is_active.is_(True),
+            )
+            .order_by(VPNAccess.device_number.asc(), VPNAccess.id.asc())
+        )
+        active_accesses = list(access_result.scalars().all())
+
+        access_payload = [
+            {
+                "access_id": access.id,
+                "device_number": access.device_number,
+                "client_uuid": access.client_uuid,
+            }
+            for access in active_accesses
+        ]
+
+    service = VPNService()
+    deleted: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+
+    for access in access_payload:
+        client_uuid = access.get("client_uuid")
+        label = f"access_id={access.get('access_id')}, device={access.get('device_number')}"
+
+        if not client_uuid:
+            skipped.append(label + " — no client_uuid")
+            continue
+
+        if DEV_MODE:
+            skipped.append(label + " — DEV_MODE, panel delete skipped")
+            continue
+
+        try:
+            await service._get_panel_client().delete_client(
+                inbound_id=service.inbound_id,
+                client_id=str(client_uuid),
+            )
+            deleted.append(label)
+        except Exception as exc:
+            errors.append(label + f" — {type(exc).__name__}: {exc}")
+
+    async with async_session_maker() as session:
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == telegram_id)
+        )
+        user = user_result.scalar_one_or_none()
+
+        if user is None:
+            return snapshot
+
+        access_result = await session.execute(
+            select(VPNAccess)
+            .where(VPNAccess.user_id == user.id)
+            .order_by(VPNAccess.device_number.asc(), VPNAccess.id.asc())
+        )
+        accesses = list(access_result.scalars().all())
+
+        disabled_access_ids: list[int] = []
+        for access in accesses:
+            if access.is_active:
+                disabled_access_ids.append(access.id)
+            access.is_active = False
+
+        user.is_active = False
+        user.device_limit = 1
+        user.used_devices = 0
+
+        await session.commit()
+        await session.refresh(user)
+
+        updated_snapshot = build_traffic_snapshot(user)
+
+    await log_user_event(
+        event_type="traffic_free_disabled",
+        target_telegram_id=telegram_id,
+        actor_telegram_id=actor_telegram_id,
+        source=source,
+        status="partial" if errors else "ok",
+        message="Free access disabled because traffic limit was reached",
+        details={
+            "snapshot": updated_snapshot,
+            "deleted": deleted,
+            "skipped": skipped,
+            "errors": errors,
+            "disabled_access_ids": disabled_access_ids,
+        },
+    )
+
+    return updated_snapshot
+
+
 async def set_user_traffic_used(
     telegram_id: int,
     used_mb: int,
@@ -90,7 +310,9 @@ async def set_user_traffic_used(
             return None
 
         old_used = _normalize_used(user.traffic_used)
-        old_limit = _normalize_limit(user.traffic_limit)
+        old_access_type = user.access_type
+        old_free_limit = _normalize_free_limit(user.traffic_limit)
+        old_paid_threshold = _get_paid_overuse_notify_mb()
 
         user.traffic_used = normalized_used
         if user.traffic_limit is None or user.traffic_limit <= 0:
@@ -102,21 +324,24 @@ async def set_user_traffic_used(
         snapshot = build_traffic_snapshot(user)
 
     await log_user_event(
-        event_type="traffic_free_updated",
+        event_type="traffic_updated",
         target_telegram_id=telegram_id,
         actor_telegram_id=actor_telegram_id,
         source=source,
         status="ok",
-        message="Free traffic usage updated",
+        message="Traffic usage updated",
         details={
+            "access_type": old_access_type,
             "old_used_mb": old_used,
             "new_used_mb": normalized_used,
-            "limit_mb": snapshot["traffic_limit_mb"],
-            "percent_used": snapshot["percent_used"],
+            "free_limit_mb": snapshot["free_limit_mb"],
+            "paid_overuse_notify_mb": snapshot["paid_overuse_notify_mb"],
+            "free_percent_used": snapshot["free_percent_used"],
+            "paid_threshold_percent": snapshot["paid_threshold_percent"],
         },
     )
 
-    if old_used < old_limit and snapshot["limit_reached"]:
+    if old_access_type == "free" and old_used < old_free_limit <= normalized_used:
         await log_user_event(
             event_type="traffic_free_limit_reached",
             target_telegram_id=telegram_id,
@@ -126,6 +351,25 @@ async def set_user_traffic_used(
             message="Free traffic limit reached",
             details=snapshot,
         )
+
+        snapshot = await _disable_free_access_due_to_limit(
+            telegram_id,
+            actor_telegram_id=actor_telegram_id,
+            source=source,
+            snapshot=snapshot,
+        )
+
+    if old_access_type == "paid" and old_used < old_paid_threshold <= normalized_used:
+        await log_user_event(
+            event_type="traffic_paid_overuse_detected",
+            target_telegram_id=telegram_id,
+            actor_telegram_id=actor_telegram_id,
+            source=source,
+            status="warning",
+            message="Paid traffic overuse threshold reached",
+            details=snapshot,
+        )
+        await _notify_admins_paid_overuse(snapshot, source)
 
     return snapshot
 
@@ -157,16 +401,18 @@ async def reset_user_traffic(
         snapshot = build_traffic_snapshot(user)
 
     await log_user_event(
-        event_type="traffic_free_reset",
+        event_type="traffic_reset",
         target_telegram_id=telegram_id,
         actor_telegram_id=actor_telegram_id,
         source=source,
         status="ok",
-        message="Free traffic usage reset",
+        message="Traffic usage reset",
         details={
+            "access_type": snapshot.get("access_type"),
             "old_used_mb": old_used,
             "new_used_mb": 0,
-            "limit_mb": snapshot["traffic_limit_mb"],
+            "free_limit_mb": snapshot["free_limit_mb"],
+            "paid_overuse_notify_mb": snapshot["paid_overuse_notify_mb"],
         },
     )
 

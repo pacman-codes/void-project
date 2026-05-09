@@ -634,11 +634,11 @@ def build_admin_help_text() -> str:
         "Отключить DB-доступы/subscription links и почистить panel clients.\n\n"
         "<b>Traffic</b>\n"
         "/adminTraffic [telegram_id]\n"
-        "Показать free-трафик пользователя.\n\n"
+        "Показать трафик пользователя.\n\n"
         "/adminTrafficSet [telegram_id] [used_mb]\n"
-        "Вручную установить использованный free-трафик.\n\n"
+        "Вручную установить использованный трафик.\n\n"
         "/adminTrafficReset [telegram_id]\n"
-        "Сбросить использованный free-трафик.\n\n"
+        "Сбросить использованный трафик.\n\n"
         "<b>Expiry</b>\n"
         "/adminExpireCheck [limit]\n"
         "Проверить истёкшие paid без изменений.\n\n"
@@ -815,20 +815,51 @@ def build_admin_traffic_text(snapshot: dict | None) -> str:
     if snapshot is None:
         return "Пользователь не найден"
 
-    return (
-        "📊 <b>Free traffic</b>\n\n"
-        f"telegram_id: <code>{h(snapshot.get('telegram_id'))}</code>\n"
-        f"user_id: <code>{h(snapshot.get('user_id'))}</code>\n"
-        f"access_type: <code>{h(snapshot.get('access_type'))}</code>\n\n"
+    lines = [
+        "📊 <b>Traffic</b>",
+        "",
+        f"telegram_id: <code>{h(snapshot.get('telegram_id'))}</code>",
+        f"user_id: <code>{h(snapshot.get('user_id'))}</code>",
+        f"access_type: <code>{h(snapshot.get('access_type'))}</code>",
+        f"is_active: <code>{h(snapshot.get('is_active'))}</code>",
+        "",
         f"used: <code>{h(snapshot.get('traffic_used_mb'))} MB</code> "
-        f"(<code>{h(snapshot.get('traffic_used_gb'))} GB</code>)\n"
-        f"limit: <code>{h(snapshot.get('traffic_limit_mb'))} MB</code> "
-        f"(<code>{h(snapshot.get('traffic_limit_gb'))} GB</code>)\n"
-        f"left: <code>{h(snapshot.get('traffic_left_mb'))} MB</code> "
-        f"(<code>{h(snapshot.get('traffic_left_gb'))} GB</code>)\n"
-        f"used percent: <code>{h(snapshot.get('percent_used'))}%</code>\n"
-        f"limit reached: <code>{h(snapshot.get('limit_reached'))}</code>"
-    )
+        f"(<code>{h(snapshot.get('traffic_used_gb'))} GB</code>)",
+        "",
+    ]
+
+    if snapshot.get("access_type") == "free":
+        lines.extend(
+            [
+                "<b>Free limit</b>",
+                f"limit: <code>{h(snapshot.get('free_limit_mb'))} MB</code> "
+                f"(<code>{h(snapshot.get('free_limit_gb'))} GB</code>)",
+                f"left: <code>{h(snapshot.get('free_left_mb'))} MB</code> "
+                f"(<code>{h(snapshot.get('free_left_gb'))} GB</code>)",
+                f"used percent: <code>{h(snapshot.get('free_percent_used'))}%</code>",
+                f"limit reached: <code>{h(snapshot.get('free_limit_reached'))}</code>",
+            ]
+        )
+    elif snapshot.get("access_type") == "paid":
+        lines.extend(
+            [
+                "<b>Paid overuse</b>",
+                f"notify after: <code>{h(snapshot.get('paid_overuse_notify_mb'))} MB</code> "
+                f"(<code>{h(snapshot.get('paid_overuse_notify_gb'))} GB</code>)",
+                f"threshold percent: <code>{h(snapshot.get('paid_threshold_percent'))}%</code>",
+                f"overuse reached: <code>{h(snapshot.get('paid_overuse_reached'))}</code>",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "<b>Limits</b>",
+                f"free limit: <code>{h(snapshot.get('free_limit_gb'))} GB</code>",
+                f"paid notify after: <code>{h(snapshot.get('paid_overuse_notify_gb'))} GB</code>",
+            ]
+        )
+
+    return "\n".join(lines)
 
 
 @router.message(F.text.regexp(r"^/adminTraffic(?:@\w+)?(?:\s|$)"))

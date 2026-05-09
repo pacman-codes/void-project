@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 
 from services.user_service import get_user
 
+DEFAULT_FREE_TRAFFIC_LIMIT_MB = 3072
+
 
 def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -25,6 +27,31 @@ async def get_access_status(telegram_id: int) -> dict:
     expiry = user.subscription_expiry
 
     if access_type == "free":
+        traffic_used = max(int(user.traffic_used or 0), 0)
+        traffic_limit = int(user.traffic_limit or DEFAULT_FREE_TRAFFIC_LIMIT_MB)
+
+        if traffic_used >= traffic_limit:
+            return {
+                "exists": True,
+                "has_access": False,
+                "is_free": True,
+                "is_paid": False,
+                "access_type": "free",
+                "expiry": None,
+                "reason": "free_traffic_limit",
+            }
+
+        if not user.is_active:
+            return {
+                "exists": True,
+                "has_access": False,
+                "is_free": True,
+                "is_paid": False,
+                "access_type": "free",
+                "expiry": None,
+                "reason": "free_inactive",
+            }
+
         return {
             "exists": True,
             "has_access": True,
