@@ -823,9 +823,9 @@ def parse_optional_limit(message: Message, default: int = 50) -> int:
 
 def build_legacy_list_text(items: list[dict]) -> str:
     lines = [
-        "🧭 <b>Legacy candidates</b>",
+        "🧭 Legacy candidates",
         "",
-        f"found: <code>{len(items)}</code>",
+        f"found: {len(items)}",
         "",
     ]
 
@@ -833,29 +833,24 @@ def build_legacy_list_text(items: list[dict]) -> str:
         lines.append("Кандидатов нет.")
         return "\n".join(lines)
 
-    truncated = False
-
     for item in items:
         block = [
-            f"• telegram_id: <code>{h(item.get('telegram_id'))}</code>",
-            f"  user_id: <code>{h(item.get('user_id'))}</code>",
-            f"  access_type: <code>{h(item.get('access_type'))}</code>",
-            f"  category: <code>{h(item.get('category'))}</code>",
-            f"  should_notify: <code>{h(item.get('should_notify'))}</code>",
-            f"  already_notified: <code>{h(item.get('already_notified'))}</code>",
-            f"  legacy_clients: <code>{h(item.get('legacy_panel_client_count'))}</code>",
+            f"• telegram_id: {item.get('telegram_id')}",
+            f"  user_id: {item.get('user_id')}",
+            f"  access_type: {item.get('access_type')}",
+            f"  category: {item.get('category')}",
+            f"  should_notify: {item.get('should_notify')}",
+            f"  already_notified: {item.get('already_notified')}",
+            f"  legacy_clients: {item.get('legacy_panel_client_count')}",
             "",
         ]
 
         candidate_text = "\n".join(lines + block).strip()
         if len(candidate_text) > 3600:
-            truncated = True
+            lines.append("...truncated")
             break
 
         lines.extend(block)
-
-    if truncated:
-        lines.append("...truncated")
 
     return "\n".join(lines).strip()
 
