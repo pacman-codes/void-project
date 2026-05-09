@@ -605,6 +605,48 @@ def build_admin_user_text(
     return text
 
 
+
+
+def build_admin_help_text() -> str:
+    return (
+        "🛠 <b>Admin commands</b>\n\n"
+        "<b>User</b>\n"
+        "/adminUser [telegram_id]\n"
+        "Показать безопасный summary пользователя.\n\n"
+        "/adminEvents [telegram_id] [limit]\n"
+        "Показать историю событий пользователя.\n\n"
+        "<b>Access</b>\n"
+        "/adminPaid [telegram_id] [days]\n"
+        "Вручную активировать paid.\n\n"
+        "/adminFree [telegram_id]\n"
+        "Вручную активировать free.\n\n"
+        "/adminRes [telegram_id]\n"
+        "Сбросить профиль пользователя.\n\n"
+        "<b>Cleanup</b>\n"
+        "/adminCleanCheck [telegram_id]\n"
+        "Предпросмотр cleanup без удаления.\n\n"
+        "/adminClean [telegram_id]\n"
+        "Отключить DB-доступы/subscription links и почистить panel clients.\n\n"
+        "<b>Expiry</b>\n"
+        "/adminExpireCheck [limit]\n"
+        "Проверить истёкшие paid без изменений.\n\n"
+        "/adminExpireRun [limit]\n"
+        "Перевести истёкшие paid в free.\n\n"
+        "<b>Examples</b>\n"
+        "<code>/adminUser 1600207976</code>\n"
+        "<code>/adminEvents 1600207976 20</code>\n"
+        "<code>/adminPaid 1600207976 30</code>"
+    )
+
+
+@router.message(F.text.regexp(r"^/adminHelp(?:@\w+)?(?:\s|$)"))
+async def admin_help_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    await message.answer(build_admin_help_text(), parse_mode="HTML")
+
+
 @router.message(F.text.regexp(r"^/adminUser(?:@\w+)?(?:\s|$)"))
 async def admin_user_command(message: Message) -> None:
     if not is_admin(message):
