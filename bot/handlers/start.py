@@ -88,7 +88,8 @@ def build_free_start_text(
     left_mb = max(limit_mb - used_mb, 0)
     left_gb = left_mb / 1024
     limit_gb = limit_mb / 1024
-    key_block = config_url or ("Will appear after activation" if lang == "en" else "Появится после активации")
+    # Raw config is intentionally not shown on the home screen.
+    # Users should use the subscription link button instead.
 
     if lang == "en":
         return (
@@ -101,8 +102,6 @@ def build_free_start_text(
             "⚡ Maximum speed\n"
             "📱 Multiple devices\n"
             "🌍 Stable operation without limits\n\n"
-            "🔑 <b>Access key:</b>\n"
-            f"<code>{key_block}</code>\n\n"
             f"📢 News and updates:\n{CHANNEL_URL}"
         )
 
@@ -116,8 +115,6 @@ def build_free_start_text(
         "⚡ Максимальную скорость\n"
         "📱 Несколько устройств\n"
         "🌍 Стабильную работу без ограничений\n\n"
-        "🔑 <b>Ключ доступа:</b>\n"
-        f"<code>{key_block}</code>\n\n"
         f"📢 Новости и обновления:\n{CHANNEL_URL}"
     )
 
@@ -273,6 +270,12 @@ async def build_home_text_and_keyboard(telegram_id: int) -> tuple[str, object, s
     access_type = access["access_type"]
     used_devices = user.used_devices if user else 0
     device_limit = user.device_limit if user else 1
+
+    if device_limit is None or device_limit <= 0:
+        device_limit = 1
+
+    used_devices = max(0, used_devices or 0)
+    used_devices = min(used_devices, device_limit)
 
     if access_type == "paid":
         return (

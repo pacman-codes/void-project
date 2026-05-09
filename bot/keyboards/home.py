@@ -85,7 +85,6 @@ def get_active_home_inline_keyboard(
         builder.button(
             text="🔗 Subscription link" if lang == "en" else "🔗 Подписочная ссылка",
             callback_data="open_subscription_link",
-            style="success",
         )
         builder.button(
             text="Renew access" if lang == "en" else "Продлить доступ",
@@ -95,7 +94,6 @@ def get_active_home_inline_keyboard(
         builder.button(
             text="➕ Add devices" if lang == "en" else "➕ Добавить устройства",
             callback_data="open_add_device",
-            style="primary",
         )
         builder.button(
             text="📘 Instruction" if lang == "en" else "📘 Инструкция",
@@ -108,7 +106,6 @@ def get_active_home_inline_keyboard(
         builder.button(
             text="❌ Not working" if lang == "en" else "❌ Не работает",
             callback_data="open_support",
-            style="danger",
         )
         builder.adjust(1, 1, 1, 2, 1)
         return builder.as_markup()
@@ -121,27 +118,22 @@ def get_active_home_inline_keyboard(
     builder.button(
         text="🔗 Subscription link" if lang == "en" else "🔗 Подписочная ссылка",
         callback_data="open_subscription_link",
-        style="primary",
     )
     builder.button(
         text="📘 Instruction" if lang == "en" else "📘 Инструкция",
         callback_data="open_instruction",
-        style="primary",
     )
     builder.button(
         text="❌ Not working" if lang == "en" else "❌ Не работает",
         callback_data="open_support",
-        style="danger",
     )
     builder.button(
         text="➕ Add devices" if lang == "en" else "➕ Добавить устройства",
         callback_data="open_add_device",
-        style="primary",
     )
     builder.button(
         text="🌐 Language" if lang == "en" else "🌐 Язык",
         callback_data="open_language",
-        style="primary",
     )
     builder.adjust(1, 1, 2, 2)
     return builder.as_markup()
