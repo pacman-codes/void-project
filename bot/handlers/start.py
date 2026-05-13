@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from aiogram import F, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select, text
 
@@ -17,6 +17,7 @@ from db.database import async_session_maker
 from db.models import User, VPNAccess
 from services.access_service import get_access_status
 from services.vpn_service import VPNService, VPNServiceError
+from services.referral_service import assign_referral_from_start_code, build_ref_code
 
 router = Router()
 
@@ -389,7 +390,9 @@ async def cmd_start(message: Message) -> None:
             start_code = parts[1].strip()
 
     if start_code:
-        await try_assign_partner_offer(message.from_user.id, start_code)
+        partner_assigned = await try_assign_partner_offer(message.from_user.id, start_code)
+        if not partner_assigned:
+            await assign_referral_from_start_code(message.from_user.id, start_code)
 
     access = await get_access_status(message.from_user.id)
 

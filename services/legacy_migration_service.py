@@ -406,10 +406,9 @@ async def collect_legacy_migration_candidates(limit: int = 50) -> list[int]:
         if not snapshot.get("should_notify"):
             continue
 
-        active_db_access_count = int(snapshot.get("active_db_access_count") or 0)
         legacy_panel_client_count = int(snapshot.get("legacy_panel_client_count") or 0)
 
-        if active_db_access_count <= 0 and legacy_panel_client_count <= 0:
+        if legacy_panel_client_count <= 0:
             continue
 
         result.append(user.telegram_id)

@@ -20,6 +20,7 @@ from services.traffic_service import (
     set_user_traffic_used,
     sync_user_traffic_from_panel,
 )
+from services.referral_service import get_referral_summary
 from services.legacy_migration_service import (
     collect_legacy_migration_candidates,
     get_legacy_migration_snapshot,
@@ -1458,3 +1459,51 @@ async def admin_legacy_list_command(message: Message) -> None:
         await message.answer("\n".join(lines).strip())
     except Exception as exc:
         await message.answer(f"Ошибка adminLegacyList: {type(exc).__name__}: {html.escape(str(exc))}")
+
+
+@router.message(F.text.regexp(r"^/adminRefs(?:@\w+)?(?:\s|$)"))
+async def admin_refs_command(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    try:
+        target_id = parse_target(message)
+    except ValueError:
+        await message.answer("Формат: /adminRefs [telegram_id]")
+        return
+
+    try:
+        summary = await get_referral_summary(target_id)
+
+        if not summary.get("user_found"):
+            await message.answer(f"Пользователь не найден: {target_id}")
+            return
+
+        lines = [
+            "🎁 Referrals",
+            "",
+            f"telegram_id: {summary.get('telegram_id')}",
+            f"ref_code: {summary.get('ref_code')}",
+            f"total_referrals: {summary.get('total_referrals')}",
+            f"paid_referrals: {summary.get('paid_referrals')}",
+            f"total_bonus_days: {summary.get('total_bonus_days')}",
+            "",
+        ]
+
+        referrals = summary.get("referrals") or []
+        if not referrals:
+            lines.append("Рефералов пока нет.")
+
+        for item in referrals[:30]:
+            lines.extend(
+                [
+                    f"• {item.get('referred_telegram_id')} @{item.get('username') or '-'}",
+                    f"  paid: {item.get('is_paid')}",
+                    f"  bonus_days: {item.get('bonus_days')}",
+                    "",
+                ]
+            )
+
+        await message.answer("\n".join(lines).strip())
+    except Exception as exc:
+        await message.answer(f"Ошибка adminRefs: {type(exc).__name__}: {html.escape(str(exc))}")

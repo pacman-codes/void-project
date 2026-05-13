@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
@@ -100,6 +100,39 @@ class UserSubscriptionLink(Base):
 
     user: Mapped["User"] = relationship(back_populates="subscription_links")
 
+
+
+class Referral(Base):
+    __tablename__ = "referrals"
+
+    __table_args__ = (
+        UniqueConstraint("referred_user_id", name="uq_referrals_referred_user_id"),
+        CheckConstraint("referrer_user_id <> referred_user_id", name="ck_referrals_no_self_referral"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    referrer_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+    referred_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+
+    referred_paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    bonus_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    payment_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
 
 
 class UserEvent(Base):

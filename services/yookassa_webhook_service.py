@@ -12,6 +12,7 @@ from db.models import User
 from services.payment_service import clear_user_payment_state, register_launch_offer_redemption
 from services.subscription_service import activate_extra_device_for_user, activate_paid_for_user
 from services.audit_log_service import log_user_event
+from services.referral_service import process_paid_referral
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,25 @@ async def process_yookassa_notification(payload: dict) -> tuple[int, str]:
                     telegram_id=telegram_id,
                     payment_id=payment_id,
                     plan_code=payment_plan_code,
+                )
+
+            try:
+                await process_paid_referral(
+                    telegram_id=telegram_id,
+                    payment_id=payment_id,
+                )
+            except Exception as e:
+                logger.exception("Failed to process referral bonus for user %s: %s", telegram_id, e)
+                await log_user_event(
+                    event_type="referral_bonus_failed",
+                    target_telegram_id=telegram_id,
+                    source="yookassa_webhook",
+                    status="error",
+                    message=str(e),
+                    details={
+                        "payment_id": payment_id,
+                        "payment_plan_code": payment_plan_code,
+                    },
                 )
 
             await log_user_event(
