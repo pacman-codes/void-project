@@ -188,11 +188,6 @@ async def process_paid_referral(
             device_number=1,
             device_name="Устройство 1",
         )
-        await service.ensure_vpn_access_record(
-            telegram_id=referrer_telegram_id,
-            device_number=2,
-            device_name="Устройство 2",
-        )
         vpn_status = "ok"
     except VPNServiceError as exc:
         vpn_status = "error"

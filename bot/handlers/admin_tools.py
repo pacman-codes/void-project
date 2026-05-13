@@ -128,7 +128,7 @@ async def set_user_paid(telegram_id: int, days: int, message: Message) -> None:
         user.access_type = "paid"
         user.is_active = True
         user.subscription_expiry = expires_at
-        user.device_limit = max(user.device_limit or 0, 2)
+        user.device_limit = 1
         user.payment_status = None
         user.payment_id = None
         user.payment_kind = None
@@ -145,11 +145,6 @@ async def set_user_paid(telegram_id: int, days: int, message: Message) -> None:
         device_name="Устройство 1",
     )
 
-    await service.ensure_vpn_access_record(
-        telegram_id=telegram_id,
-        device_number=2,
-        device_name="Устройство 2",
-    )
 
     await log_user_event(
         event_type="admin_paid",
@@ -161,7 +156,7 @@ async def set_user_paid(telegram_id: int, days: int, message: Message) -> None:
         details={
             "days": days,
             "expires_at": expires_at.isoformat(),
-            "device_limit": 2,
+            "device_limit": 1,
         },
     )
 

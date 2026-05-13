@@ -34,8 +34,7 @@ async def activate_paid_for_user(
         user.is_active = True
         user.access_type = "paid"
 
-        if user.device_limit is None or user.device_limit < 2:
-            user.device_limit = 2
+        user.device_limit = 1
 
         if user.used_devices is None or user.used_devices < 0:
             user.used_devices = 0
@@ -58,11 +57,6 @@ async def activate_paid_for_user(
             telegram_id=user_id,
             device_number=1,
             device_name="Устройство 1",
-        )
-        await service.ensure_vpn_access_record(
-            telegram_id=user_id,
-            device_number=2,
-            device_name="Устройство 2",
         )
     except VPNServiceError as e:
         await log_user_event(

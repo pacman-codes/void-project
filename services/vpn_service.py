@@ -113,6 +113,11 @@ class VPNService:
         email = client.get("email", "access")
         tag = quote(f"{self.server_name}-{email}")
 
+        # PROD Reality parameters verified against working client config.
+        server_name = "www.yahoo.com"
+        short_id = "8dec10580aa799e2"
+        spider_x = "/BB06vv9Hc0FIARY"
+
         query_parts = [
             f"type={quote(str(network))}",
             "encryption=none",
@@ -120,12 +125,9 @@ class VPNService:
             f"pbk={quote(str(public_key))}",
             f"fp={quote(str(fingerprint))}",
             f"sni={quote(str(server_name))}",
+            f"sid={quote(str(short_id))}",
+            f"spx={quote(str(spider_x))}",
         ]
-
-        if short_id:
-            query_parts.append(f"sid={quote(str(short_id))}")
-
-        query_parts.append("spx=%2F")
 
         config_url = f"vless://{client_id}@{address}:{port}?{'&'.join(query_parts)}#{tag}"
         return config_url
