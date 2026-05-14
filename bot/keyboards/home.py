@@ -92,10 +92,6 @@ def get_active_home_inline_keyboard(
             style="success",
         )
         builder.button(
-            text="➕ Add devices" if lang == "en" else "➕ Добавить устройства",
-            callback_data="open_add_device",
-        )
-        builder.button(
             text="🎁 Referral program" if lang == "en" else "🎁 Реферальная программа",
             callback_data="open_referral",
         )
@@ -111,7 +107,7 @@ def get_active_home_inline_keyboard(
             text="❌ Not working" if lang == "en" else "❌ Не работает",
             callback_data="open_support",
         )
-        builder.adjust(1, 1, 1, 1, 2, 1)
+        builder.adjust(1, 1, 1, 2, 1)
         return builder.as_markup()
 
     builder.button(
@@ -136,14 +132,10 @@ def get_active_home_inline_keyboard(
         callback_data="open_support",
     )
     builder.button(
-        text="➕ Add devices" if lang == "en" else "➕ Добавить устройства",
-        callback_data="open_add_device",
-    )
-    builder.button(
         text="🌐 Language" if lang == "en" else "🌐 Язык",
         callback_data="open_language",
     )
-    builder.adjust(1, 1, 1, 2, 2)
+    builder.adjust(1, 1, 1, 2)
     return builder.as_markup()
 
 

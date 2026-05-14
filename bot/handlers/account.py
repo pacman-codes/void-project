@@ -1,12 +1,12 @@
-from aiogram import Router, F
-from aiogram.types import CallbackQuery
 from datetime import datetime
 
-from db.models import User
-from db.database import async_session_maker
+from aiogram import F, Router
+from aiogram.types import CallbackQuery
 from sqlalchemy import select
 
 from bot.keyboards.user import get_account_inline_keyboard
+from db.database import async_session_maker
+from db.models import User
 
 router = Router()
 
@@ -22,59 +22,45 @@ def format_expiry(dt: datetime | None, lang: str) -> str:
 
 def build_free_account_text(user: User, lang: str) -> str:
     remaining = max(0, (user.traffic_limit or 0) - (user.traffic_used or 0))
-    used = user.used_devices or 0
-    limit = user.device_limit or 1
 
     if lang == "en":
         return (
             "🎁 <b>Free access</b>\n\n"
-            f"📱 Devices: <b>{used} / {limit}</b>\n"
             f"📊 Traffic left: <b>{remaining} MB</b>\n\n"
             "Good for basic use\n\n"
-            "🔑 Access key:\n"
-            "Available in the <b>Devices</b> section\n\n"
+            "🔗 Access is available through the <b>Subscription link</b> on the main screen.\n\n"
             "💎 Full access gives:\n"
             "• Maximum speed\n"
-            "• More devices\n"
             "• Stable unlimited usage"
         )
 
     return (
         "🆓 <b>Бесплатный доступ</b>\n\n"
-        f"📱 Устройства: <b>{used} / {limit}</b>\n"
         f"📊 Осталось трафика: <b>{remaining} МБ</b>\n\n"
         "Подходит для базового использования\n\n"
-        "🔑 Ключ доступа:\n"
-        "Доступен в разделе <b>Устройства</b>\n\n"
+        "🔗 Доступ доступен через <b>подписочную ссылку</b> на главном экране.\n\n"
         "💎 Полный доступ открывает:\n"
         "• Максимальную скорость\n"
-        "• Больше устройств\n"
         "• Стабильную работу без ограничений"
     )
 
 
 def build_paid_account_text(user: User, lang: str) -> str:
     expiry = format_expiry(user.subscription_expiry, lang)
-    used = user.used_devices or 0
-    limit = user.device_limit or 0
 
     if lang == "en":
         return (
             "👑 <b>Full access active</b>\n\n"
             "🚀 Everything works without limits\n\n"
-            f"📅 Valid until: <b>{expiry}</b>\n"
-            f"📱 Devices: <b>{used} / {limit}</b>\n\n"
-            "🔑 Keys and device management:\n"
-            "Open <b>Devices</b>"
+            f"📅 Valid until: <b>{expiry}</b>\n\n"
+            "🔗 Subscription link is available on the main screen."
         )
 
     return (
         "👑 <b>Полный доступ активен</b>\n\n"
         "🚀 Всё работает без ограничений\n\n"
-        f"📅 Доступ до: <b>{expiry}</b>\n"
-        f"📱 Устройства: <b>{used} / {limit}</b>\n\n"
-        "🔑 Ключи и управление устройствами:\n"
-        "Откройте раздел <b>Устройства</b>"
+        f"📅 Доступ до: <b>{expiry}</b>\n\n"
+        "🔗 Подписочная ссылка доступна на главном экране."
     )
 
 

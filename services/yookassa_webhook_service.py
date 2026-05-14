@@ -10,7 +10,7 @@ from config.config import settings
 from db.database import async_session_maker
 from db.models import User
 from services.payment_service import clear_user_payment_state, register_launch_offer_redemption
-from services.subscription_service import activate_extra_device_for_user, activate_paid_for_user
+from services.subscription_service import activate_paid_for_user
 from services.audit_log_service import log_user_event
 from services.referral_service import process_paid_referral
 

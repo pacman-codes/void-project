@@ -47,14 +47,11 @@ def format_expiry(value, lang: str) -> str:
 def build_paid_start_text(
     lang: str,
     expiry,
-    used_devices: int,
-    device_limit: int,
 ) -> str:
     if lang == "en":
         return (
             "💎 <b>Full access active</b>\n\n"
             f"📅 Valid until: <b>{format_expiry(expiry, lang)}</b>\n"
-            f"📱 Devices: <b>{used_devices} of {device_limit}</b>\n\n"
             "—\n\n"
             "⚡ High speed without limits\n"
             "🔒 Protected connection\n"
@@ -66,7 +63,6 @@ def build_paid_start_text(
     return (
         "💎 <b>Полный доступ активен</b>\n\n"
         f"📅 Действует до: <b>{format_expiry(expiry, lang)}</b>\n"
-        f"📱 Устройства: <b>{used_devices} из {device_limit}</b>\n\n"
         "—\n\n"
         "⚡ Высокая скорость без ограничений\n"
         "🔒 Защищённое соединение\n"
@@ -81,8 +77,6 @@ def build_free_start_text(
     traffic_used: int | None,
     traffic_limit: int | None,
     config_url: str | None,
-    used_devices: int,
-    device_limit: int,
 ) -> str:
     used_mb = traffic_used or 0
     limit_mb = traffic_limit or DEFAULT_TRAFFIC_LIMIT_MB
@@ -95,7 +89,6 @@ def build_free_start_text(
     if lang == "en":
         return (
             "🆓 <b>Free access</b>\n\n"
-            f"📱 Devices: <b>{used_devices} of {device_limit}</b>\n"
             f"📊 Remaining traffic: <b>{left_gb:.1f} of {limit_gb:.0f} GB</b>\n\n"
             "Suitable for basic use\n\n"
             "—\n\n"
@@ -108,7 +101,6 @@ def build_free_start_text(
 
     return (
         "🆓 <b>Бесплатный доступ</b>\n\n"
-        f"📱 Устройства: <b>{used_devices} из {device_limit}</b>\n"
         f"📊 Осталось трафика: <b>{left_gb:.1f} из {limit_gb:.0f} ГБ</b>\n\n"
         "Подходит для базового использования\n\n"
         "—\n\n"
@@ -311,22 +303,11 @@ async def build_home_text_and_keyboard(telegram_id: int) -> tuple[str, object, s
         return get_welcome_text(lang), get_start_inline_keyboard(lang), lang
 
     access_type = access["access_type"]
-    used_devices = user.used_devices if user else 0
-    device_limit = user.device_limit if user else 1
-
-    if device_limit is None or device_limit <= 0:
-        device_limit = 1
-
-    used_devices = max(0, used_devices or 0)
-    used_devices = min(used_devices, device_limit)
-
     if access_type == "paid":
         return (
             build_paid_start_text(
                 lang=lang,
                 expiry=access["expiry"],
-                used_devices=used_devices,
-                device_limit=device_limit,
             ),
             get_active_home_inline_keyboard(lang, access_type),
             lang,
@@ -340,8 +321,6 @@ async def build_home_text_and_keyboard(telegram_id: int) -> tuple[str, object, s
             traffic_used=user.traffic_used if user else 0,
             traffic_limit=user.traffic_limit if user else DEFAULT_TRAFFIC_LIMIT_MB,
             config_url=config_url,
-            used_devices=used_devices,
-            device_limit=device_limit,
         ),
         get_active_home_inline_keyboard(lang, access_type),
         lang,
