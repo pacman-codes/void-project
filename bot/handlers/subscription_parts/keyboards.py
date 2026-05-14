@@ -68,7 +68,7 @@ def build_devices_keyboard(
         )
     else:
         builder.button(
-            text="💎 Get full access" if lang == "en" else "💎 Получить полный доступ",
+            text="PRO plan 🤌" if lang == "en" else "Тариф PRO 🤌",
             callback_data="open_subscription",
             style="success",
         )
