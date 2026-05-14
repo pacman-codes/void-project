@@ -128,7 +128,7 @@ async def set_user_paid(telegram_id: int, days: int, message: Message) -> None:
         user.access_type = "paid"
         user.is_active = True
         user.subscription_expiry = expires_at
-        user.device_limit = 1
+        user.device_limit = max(user.device_limit or 0, 2)
         user.payment_status = None
         user.payment_id = None
         user.payment_kind = None
@@ -156,7 +156,7 @@ async def set_user_paid(telegram_id: int, days: int, message: Message) -> None:
         details={
             "days": days,
             "expires_at": expires_at.isoformat(),
-            "device_limit": 1,
+            "device_limit": 2,
         },
     )
 

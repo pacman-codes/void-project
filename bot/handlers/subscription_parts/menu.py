@@ -185,11 +185,6 @@ async def ensure_access_before_subscription_link(telegram_id: int) -> tuple[bool
                 device_number=1,
                 device_name="Устройство 1",
             )
-            await service.ensure_vpn_access_record(
-                telegram_id=telegram_id,
-                device_number=2,
-                device_name="Устройство 2",
-            )
             return True, "OK"
 
         return False, "Доступ не активен"
@@ -413,6 +408,31 @@ async def back_from_legal(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback)
 
 
+async def show_free_limit_reached_screen(callback: CallbackQuery) -> None:
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    await safe_edit_text(
+        callback.message,
+        text=(
+            "⛔️ <b>Бесплатный лимит трафика закончился</b>\n\n"
+            "Бесплатный доступ уже использован: <b>3 ГБ</b>.\n\n"
+            "Полный доступ — без лимита по трафику, с максимальной скоростью и большим количеством устройств."
+        ),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="💎 Получить полный доступ",
+                        callback_data="subscription_paid",
+                    )
+                ]
+            ]
+        ),
+        parse_mode="HTML",
+    )
+    await safe_callback_answer(callback)
+
+
 @router.callback_query(F.data == "subscription_free")
 async def subscription_free(callback: CallbackQuery) -> None:
     can_continue = await ensure_terms_then_continue(callback, "free")
@@ -421,6 +441,10 @@ async def subscription_free(callback: CallbackQuery) -> None:
 
     success, result_text = await activate_free_for_user(callback.from_user.id)
     if not success:
+        if result_text == "FREE_TRAFFIC_LIMIT_REACHED":
+            await show_free_limit_reached_screen(callback)
+            return
+
         await safe_callback_answer(callback, result_text, show_alert=True)
         return
 
@@ -468,6 +492,10 @@ async def legal_accept(callback: CallbackQuery) -> None:
     if action == "free":
         free_success, free_result = await activate_free_for_user(callback.from_user.id)
         if not free_success:
+            if free_result == "FREE_TRAFFIC_LIMIT_REACHED":
+                await show_free_limit_reached_screen(callback)
+                return
+
             await safe_callback_answer(callback, free_result, show_alert=True)
             return
 

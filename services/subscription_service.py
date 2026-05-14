@@ -34,7 +34,7 @@ async def activate_paid_for_user(
         user.is_active = True
         user.access_type = "paid"
 
-        user.device_limit = 1
+        user.device_limit = max(user.device_limit or 0, 2)
 
         if user.used_devices is None or user.used_devices < 0:
             user.used_devices = 0
