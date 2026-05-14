@@ -20,6 +20,10 @@ class User(Base):
 
     traffic_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     traffic_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    traffic_period_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    traffic_period_base_mb: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    traffic_period_panel_total_mb: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    traffic_overuse_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     trial_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

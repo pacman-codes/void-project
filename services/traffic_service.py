@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import os
+from datetime import datetime
 from typing import Any
 
 from aiogram import Bot
@@ -255,6 +256,16 @@ def _normalize_used(value: int | None) -> int:
     return int(value)
 
 
+def _month_start(dt: datetime | None = None) -> datetime:
+    current = dt or datetime.utcnow()
+    return current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _get_paid_period_used_mb(user: User, panel_total_mb: int) -> int:
+    base_mb = _normalize_used(getattr(user, "traffic_period_base_mb", 0))
+    return max(0, int(panel_total_mb) - base_mb)
+
+
 def build_traffic_snapshot(user: User) -> dict[str, Any]:
     used_mb = _normalize_used(user.traffic_used)
     free_limit_mb = _normalize_free_limit(user.traffic_limit)
@@ -276,6 +287,10 @@ def build_traffic_snapshot(user: User) -> dict[str, Any]:
 
         "traffic_used_mb": used_mb,
         "traffic_used_gb": round(used_mb / 1024, 2),
+        "traffic_period_started_at": user.traffic_period_started_at.isoformat() if user.traffic_period_started_at else None,
+        "traffic_period_base_mb": _normalize_used(getattr(user, "traffic_period_base_mb", 0)),
+        "traffic_period_panel_total_mb": _normalize_used(getattr(user, "traffic_period_panel_total_mb", 0)),
+        "traffic_overuse_notified_at": user.traffic_overuse_notified_at.isoformat() if user.traffic_overuse_notified_at else None,
 
         "free_limit_mb": free_limit_mb,
         "free_limit_gb": round(free_limit_mb / 1024, 2),
@@ -438,8 +453,40 @@ async def sync_user_traffic_from_panel(
 
     db_snapshot = panel_snapshot["db_snapshot"]
     old_used_mb = int(db_snapshot.get("traffic_used_mb") or 0)
-    new_used_mb = int(panel_snapshot.get("total_mb") or 0)
+    raw_panel_total_mb = int(panel_snapshot.get("total_mb") or 0)
+    new_used_mb = raw_panel_total_mb
     synced_access_count = int(panel_snapshot.get("synced_access_count") or 0)
+
+    if db_snapshot.get("access_type") == "paid":
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(User).where(User.telegram_id == telegram_id)
+            )
+            user = result.scalar_one_or_none()
+
+            if user is not None:
+                now = datetime.utcnow()
+                current_period_start = _month_start(now)
+
+                if (
+                    user.traffic_period_started_at is None
+                    or user.traffic_period_started_at < current_period_start
+                    or _normalize_used(user.traffic_period_panel_total_mb) > raw_panel_total_mb
+                ):
+                    user.traffic_period_started_at = current_period_start
+                    user.traffic_period_base_mb = raw_panel_total_mb
+                    user.traffic_period_panel_total_mb = raw_panel_total_mb
+                    user.traffic_used = 0
+                    user.traffic_overuse_notified_at = None
+                    await session.commit()
+                    await session.refresh(user)
+
+                    old_used_mb = 0
+                    db_snapshot = build_traffic_snapshot(user)
+
+                new_used_mb = _get_paid_period_used_mb(user, raw_panel_total_mb)
+                user.traffic_period_panel_total_mb = raw_panel_total_mb
+                await session.commit()
 
     if panel_snapshot["errors"]:
         await log_user_event(
@@ -780,16 +827,34 @@ async def set_user_traffic_used(
         )
 
     if old_access_type == "paid" and old_used < old_paid_threshold <= normalized_used:
-        await log_user_event(
-            event_type="traffic_paid_overuse_detected",
-            target_telegram_id=telegram_id,
-            actor_telegram_id=actor_telegram_id,
-            source=source,
-            status="warning",
-            message="Paid traffic overuse threshold reached",
-            details=snapshot,
-        )
-        await _notify_admins_paid_overuse(snapshot, source)
+        should_notify = True
+
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(User).where(User.telegram_id == telegram_id)
+            )
+            user = result.scalar_one_or_none()
+
+            if user is not None and user.traffic_overuse_notified_at is not None:
+                period_start = user.traffic_period_started_at or _month_start()
+                if user.traffic_overuse_notified_at >= period_start:
+                    should_notify = False
+
+            if user is not None and should_notify:
+                user.traffic_overuse_notified_at = datetime.utcnow()
+                await session.commit()
+
+        if should_notify:
+            await log_user_event(
+                event_type="traffic_paid_overuse_detected",
+                target_telegram_id=telegram_id,
+                actor_telegram_id=actor_telegram_id,
+                source=source,
+                status="warning",
+                message="Paid traffic overuse threshold reached",
+                details=snapshot,
+            )
+            await _notify_admins_paid_overuse(snapshot, source)
 
     return snapshot
 
@@ -812,6 +877,12 @@ async def reset_user_traffic(
         old_used = _normalize_used(user.traffic_used)
 
         user.traffic_used = 0
+
+        if user.access_type == "paid":
+            user.traffic_period_started_at = _month_start()
+            user.traffic_period_base_mb = _normalize_used(user.traffic_period_panel_total_mb)
+            user.traffic_overuse_notified_at = None
+
         if user.traffic_limit is None or user.traffic_limit <= 0:
             user.traffic_limit = DEFAULT_FREE_TRAFFIC_LIMIT_MB
 
