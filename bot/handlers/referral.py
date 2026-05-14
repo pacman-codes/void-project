@@ -24,7 +24,7 @@ def build_referral_text(
     ref_link = f"https://t.me/{bot_username}?start={ref_code}"
 
     return (
-        "🎁 <b>Реферальная программа</b>\n\n"
+        "🎁 <b>Пригласи друга👋</b>\n\n"
         f"👥 Приглашено друзей: <b>{total_referrals}</b>\n"
         f"💳 Оплатили доступ: <b>{paid_referrals}</b>\n"
         f"🎉 Бонус получен: <b>+{total_bonus_days} дн.</b>\n\n"

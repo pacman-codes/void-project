@@ -96,7 +96,7 @@ async def build_subscription_by_token(token: str) -> str:
         link = link_result.scalar_one_or_none()
 
         if link is None:
-            raise SubscriptionLinkError("Подписочная ссылка не найдена или отключена")
+            raise SubscriptionLinkError("Подключение не найдена или отключена")
 
         user_result = await session.execute(
             select(User).where(User.id == link.user_id)

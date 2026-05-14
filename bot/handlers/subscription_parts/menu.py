@@ -422,7 +422,7 @@ async def show_free_limit_reached_screen(callback: CallbackQuery) -> None:
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="💎 Получить полный доступ",
+                        text="Тариф PRO 🤌",
                         callback_data="subscription_paid",
                     )
                 ]

@@ -183,7 +183,7 @@ async def _maybe_notify_free_traffic_thresholds(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text="💎 Получить полный доступ",
+                            text="Тариф PRO 🤌",
                             callback_data="open_subscription",
                         )
                     ]
@@ -206,7 +206,7 @@ async def _maybe_notify_free_traffic_thresholds(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text="💎 Получить полный доступ",
+                            text="Тариф PRO 🤌",
                             callback_data="open_subscription",
                         )
                     ]
@@ -235,7 +235,7 @@ async def _notify_free_access_disabled(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="💎 Получить полный доступ",
+                        text="Тариф PRO 🤌",
                         callback_data="open_subscription",
                     )
                 ]

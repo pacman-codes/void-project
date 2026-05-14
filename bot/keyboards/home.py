@@ -82,7 +82,7 @@ def get_active_home_inline_keyboard(
 
     if _is_paid(access_type):
         builder.button(
-            text="🔗 Subscription link" if lang == "en" else "🔗 Подписочная ссылка",
+            text="🔗 Connection" if lang == "en" else "🔗 Подключение",
             callback_data="open_subscription_link",
         )
         builder.button(
@@ -91,7 +91,7 @@ def get_active_home_inline_keyboard(
             style="success",
         )
         builder.button(
-            text="🎁 Referral program" if lang == "en" else "🎁 Реферальная программа",
+            text="Invite a friend👋" if lang == "en" else "Пригласи друга👋",
             callback_data="open_referral",
         )
         builder.button(
@@ -110,16 +110,16 @@ def get_active_home_inline_keyboard(
         return builder.as_markup()
 
     builder.button(
-        text="💎 Get full access" if lang == "en" else "💎 Получить полный доступ",
+        text="PRO plan 🤌" if lang == "en" else "Тариф PRO 🤌",
         callback_data="open_subscription",
         style="success",
     )
     builder.button(
-        text="🔗 Subscription link" if lang == "en" else "🔗 Подписочная ссылка",
+        text="🔗 Connection" if lang == "en" else "🔗 Подключение",
         callback_data="open_subscription_link",
     )
     builder.button(
-        text="🎁 Referral program" if lang == "en" else "🎁 Реферальная программа",
+        text="Invite a friend👋" if lang == "en" else "Пригласи друга👋",
         callback_data="open_referral",
     )
     builder.button(

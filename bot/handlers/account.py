@@ -28,7 +28,7 @@ def build_free_account_text(user: User, lang: str) -> str:
             "🎁 <b>Free access</b>\n\n"
             f"📊 Traffic left: <b>{remaining} MB</b>\n\n"
             "Good for basic use\n\n"
-            "🔗 Access is available through the <b>Subscription link</b> on the main screen.\n\n"
+            "🔗 Access is available through the <b>Connection</b> on the main screen.\n\n"
             "💎 Full access gives:\n"
             "• Maximum speed\n"
             "• Stable unlimited usage"
@@ -53,14 +53,14 @@ def build_paid_account_text(user: User, lang: str) -> str:
             "👑 <b>Full access active</b>\n\n"
             "🚀 Everything works without limits\n\n"
             f"📅 Valid until: <b>{expiry}</b>\n\n"
-            "🔗 Subscription link is available on the main screen."
+            "🔗 Connection is available on the main screen."
         )
 
     return (
         "👑 <b>Полный доступ активен</b>\n\n"
         "🚀 Всё работает без ограничений\n\n"
         f"📅 Доступ до: <b>{expiry}</b>\n\n"
-        "🔗 Подписочная ссылка доступна на главном экране."
+        "🔗 Подключение доступна на главном экране."
     )
 
 

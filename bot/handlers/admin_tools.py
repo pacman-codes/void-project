@@ -580,7 +580,7 @@ def build_admin_user_text(
 
     lines.extend(
         [
-            "🔗 <b>Subscription links</b>",
+            "🔗 <b>Connections</b>",
             f"total: <code>{len(links)}</code>, active: <code>{len(active_links)}</code>, inactive: <code>{len(inactive_links)}</code>",
         ]
     )

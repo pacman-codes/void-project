@@ -140,14 +140,14 @@ def get_device_limit_reached_keyboard(
 
     if lang == "en":
         builder.button(
-            text="💎 Get full access",
+            text="PRO plan 🤌",
             callback_data="open_subscription",
             style="success",
         )
         builder.button(text="🏠 Home", callback_data="back_home")
     else:
         builder.button(
-            text="💎 Получить полный доступ",
+            text="Тариф PRO 🤌",
             callback_data="open_subscription",
             style="success",
         )

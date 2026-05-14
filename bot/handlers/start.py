@@ -47,27 +47,25 @@ def format_expiry(value, lang: str) -> str:
 def build_paid_start_text(
     lang: str,
     expiry,
+    first_name: str | None = None,
 ) -> str:
+    display_name = first_name or ("friend" if lang == "en" else "друг")
+
     if lang == "en":
         return (
-            "💎 <b>Full access active</b>\n\n"
-            f"📅 Valid until: <b>{format_expiry(expiry, lang)}</b>\n"
-            "—\n\n"
-            "⚡ High speed without limits\n"
-            "🔒 Protected connection\n"
-            "🌍 Stable operation\n\n"
-            "💡 You can connect additional devices\n\n"
-            f"📢 News and updates:\n{CHANNEL_URL}"
+            f"{display_name}, thank you for being with us 😏\n\n"
+            f"PRO subscription 🤌 is active until <b>{format_expiry(expiry, lang)}</b>\n\n"
+            "We appreciate you and keep improving the service 🍔\n"
+            'Feedback and suggestions go <a href="https://t.me/voidModeBot">here</a>.\n\n'
+            "Do not forget to renew in time 👇"
         )
 
     return (
-        "💎 <b>Полный доступ активен</b>\n\n"
-        f"📅 Действует до: <b>{format_expiry(expiry, lang)}</b>\n"
-        "—\n\n"
-        "⚡ Высокая скорость без ограничений\n"
-        "🔒 Защищённое соединение\n"
-        "🌍 Стабильная работа\n\n"
-        f"📢 Новости и обновления:\n{CHANNEL_URL}"
+        f"{display_name}, спасибо, что с нами! 😏\n\n"
+        f"Подписка PRO 🤌 действует до <b>{format_expiry(expiry, lang)}</b>\n\n"
+        "Мы ценим вас и стараемся сделать сервис лучше 🍔\n"
+        'Жалобы и предложения <a href="https://t.me/voidModeBot">сюда</a>.\n\n'
+        "Не забудьте вовремя продлить доступ 👇"
     )
 
 
@@ -87,27 +85,25 @@ def build_free_start_text(
 
     if lang == "en":
         return (
-            "🆓 <b>Free access</b>\n\n"
-            f"📊 Remaining traffic: <b>{left_gb:.1f} of {limit_gb:.0f} GB</b>\n\n"
-            "Suitable for basic use\n\n"
-            "—\n\n"
-            "💎 <b>Full access unlocks:</b>\n\n"
-            "⚡ Maximum speed\n"
-            "📱 Multiple devices\n"
-            "🌍 Stable operation without limits\n\n"
-            f"📢 News and updates:\n{CHANNEL_URL}"
+            "Your try-it plan 🤏 includes:\n\n"
+            f"Traffic: <b>{left_gb:.1f} of {limit_gb:.0f} GB</b> / month\n"
+            "1 device\n\n"
+            "For comfort, we recommend PRO 🤌:\n"
+            "• high speed\n"
+            "• up to 7 devices available\n"
+            "• unlimited traffic\n\n"
+            "Thank you for being with us 🫶"
         )
 
     return (
-        "🆓 <b>Бесплатный доступ</b>\n\n"
-        f"📊 Осталось трафика: <b>{left_gb:.1f} из {limit_gb:.0f} ГБ</b>\n\n"
-        "Подходит для базового использования\n\n"
-        "—\n\n"
-        "💎 <b>Полный доступ открывает:</b>\n\n"
-        "⚡ Максимальную скорость\n"
-        "📱 Несколько устройств\n"
-        "🌍 Стабильную работу без ограничений\n\n"
-        f"📢 Новости и обновления:\n{CHANNEL_URL}"
+        "Ваш тариф пощупать 🤏 включает:\n\n"
+        f"Трафик: <b>{left_gb:.1f} из {limit_gb:.0f} ГБ</b> / месяц\n"
+        "1 устройство\n\n"
+        "Для удобства рекомендуем тариф PRO 🤌:\n"
+        "• высокая скорость\n"
+        "• до 7 устройств доступно\n"
+        "• безлимитный трафик\n\n"
+        "Спасибо, что вы с нами 🫶"
     )
 
 
@@ -271,7 +267,7 @@ def get_free_limit_reached_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="💎 Get full access" if lang == "en" else "💎 Получить полный доступ",
+                    text="PRO plan 🤌" if lang == "en" else "Тариф PRO 🤌",
                     callback_data="subscription_paid",
                 )
             ]
@@ -307,6 +303,7 @@ async def build_home_text_and_keyboard(telegram_id: int) -> tuple[str, object, s
             build_paid_start_text(
                 lang=lang,
                 expiry=access["expiry"],
+                first_name=user.first_name if user else None,
             ),
             get_active_home_inline_keyboard(lang, access_type),
             lang,

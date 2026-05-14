@@ -105,7 +105,7 @@ def _notification_keyboard(category: str) -> InlineKeyboardMarkup:
                 ],
                 [
                     InlineKeyboardButton(
-                        text="💎 Получить полный доступ",
+                        text="Тариф PRO 🤌",
                         callback_data="open_subscription",
                     )
                 ],
@@ -116,7 +116,7 @@ def _notification_keyboard(category: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="💎 Получить полный доступ",
+                    text="Тариф PRO 🤌",
                     callback_data="open_subscription",
                 )
             ]

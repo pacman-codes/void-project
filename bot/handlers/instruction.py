@@ -66,7 +66,7 @@ def build_detailed_instruction_text(lang: str) -> str:
         return (
             "📖 <b>Detailed instruction</b>\n\n"
             "1. Download the app for your device.\n"
-            "2. Open <b>Subscription link</b> in this bot.\n"
+            "2. Open <b>Connection</b> in this bot.\n"
             "3. Tap your link to copy it.\n"
             "4. Open the app.\n"
             "5. Find import/add subscription.\n"
@@ -78,7 +78,7 @@ def build_detailed_instruction_text(lang: str) -> str:
     return (
         "📖 <b>Подробная инструкция</b>\n\n"
         "1. Скачай приложение для своего устройства.\n"
-        "2. Здесь же, в боте, открой <b>Подписочная ссылка</b>.\n"
+        "2. Здесь же, в боте, открой <b>Подключение</b>.\n"
         "3. Нажми на свою ссылку, чтобы скопировать её.\n"
         "4. Открой приложение.\n"
         "5. Найди импорт/добавление подписки.\n"
@@ -100,7 +100,7 @@ def build_instruction_text(lang: str) -> str:
         return (
             "📖 <b>Instruction</b>\n\n"
             "1. Download the app for your device using the buttons below.\n"
-            "2. In this bot, open <b>Subscription link</b>.\n"
+            "2. In this bot, open <b>Connection</b>.\n"
             "3. Tap your link to copy it.\n"
             "4. Paste it into the app.\n"
             "5. Tap connect ✅"
@@ -109,7 +109,7 @@ def build_instruction_text(lang: str) -> str:
     return (
         "📖 <b>Инструкция:</b>\n\n"
         "1. Скачай приложение для своего устройства (ссылки ниже)\n"
-        "2. Здесь же, в боте, открой <b>Подписочная ссылка</b>\n"
+        "2. Здесь же, в боте, открой <b>Подключение</b>\n"
         "3. Нажми на свою ссылку, чтобы скопировать её\n"
         "4. Вставь её в приложение\n"
         "5. Нажми «Подключиться» ✅"
