@@ -452,6 +452,78 @@ class PanelClient:
             "client": created,
         }
 
+    async def update_client_enable(
+        self,
+        inbound_id: int,
+        client_id: str,
+        *,
+        enable: bool,
+    ) -> dict[str, Any]:
+        if not client_id:
+            raise PanelRequestError("client_id пустой, обновление клиента невозможно")
+
+        inbound = await self.get_inbound(inbound_id)
+        clients = inbound.get("clients", [])
+        target = None
+
+        for item in clients:
+            if str(item.get("id", "")) == str(client_id):
+                target = item
+                break
+
+        if target is None:
+            raise PanelRequestError(
+                f"Клиент {client_id} не найден в inbound {inbound_id}"
+            )
+
+        client_payload = {
+            "id": target.get("id", client_id),
+            "email": target.get("email", ""),
+            "limitIp": int(target.get("limit_ip", target.get("limitIp", 0)) or 0),
+            "totalGB": int(target.get("total_gb_bytes", target.get("totalGB", 0)) or 0),
+            "expiryTime": int(target.get("expiry_time_ms", target.get("expiryTime", 0)) or 0),
+            "enable": enable,
+            "tgId": str(target.get("tg_id", target.get("tgId", "")) or ""),
+            "subId": str(target.get("sub_id", target.get("subId", "")) or ""),
+            "flow": str(target.get("flow", "") or ""),
+            "comment": str(target.get("comment", "") or ""),
+            "reset": int(target.get("reset", 0) or 0),
+        }
+
+        payload = {
+            "id": inbound_id,
+            "settings": json.dumps(
+                {"clients": [client_payload]},
+                ensure_ascii=False,
+            ),
+        }
+
+        client = await self.login()
+        try:
+            data = await self._request_json(
+                client,
+                "POST",
+                f"/panel/api/inbounds/updateClient/{client_id}",
+                json_data=payload,
+            )
+        finally:
+            await client.aclose()
+
+        if not data.get("success"):
+            raise PanelRequestError(
+                f"Панель вернула success=false при updateClient {client_id}: {data}"
+            )
+
+        updated = await self.get_client_by_email(inbound_id, str(target.get("email", "")))
+
+        return {
+            "success": True,
+            "message": data.get("msg", ""),
+            "client_id": client_id,
+            "enable": enable,
+            "client": updated,
+        }
+
     async def delete_client(self, inbound_id: int, client_id: str) -> dict[str, Any]:
         if not client_id:
             raise PanelRequestError("client_id пустой, удаление клиента невозможно")

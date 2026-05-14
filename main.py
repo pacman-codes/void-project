@@ -9,6 +9,7 @@ from config.config import settings
 from db.database import init_db
 from bot.handlers import register_handlers
 from services.expiry_scheduler import maybe_start_paid_expiry_scheduler
+from services.traffic_scheduler import maybe_start_traffic_sync_scheduler
 
 
 async def main() -> None:
@@ -25,15 +26,24 @@ async def main() -> None:
     register_handlers(dp)
 
     expiry_scheduler_task = maybe_start_paid_expiry_scheduler()
+    traffic_scheduler_task = maybe_start_traffic_sync_scheduler()
 
     print("Бот запущен 🚀")
 
     try:
         await dp.start_polling(bot)
     finally:
-        if expiry_scheduler_task is not None:
-            expiry_scheduler_task.cancel()
-            await asyncio.gather(expiry_scheduler_task, return_exceptions=True)
+        tasks = [
+            task
+            for task in (expiry_scheduler_task, traffic_scheduler_task)
+            if task is not None
+        ]
+
+        for task in tasks:
+            task.cancel()
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 if __name__ == "__main__":

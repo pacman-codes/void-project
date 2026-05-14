@@ -60,6 +60,15 @@ async def activate_free_for_user(user_id: int) -> tuple[bool, str]:
         if user is None:
             return False, "Пользователь не найден."
 
+        current_used = int(user.traffic_used or 0)
+        current_limit = int(user.traffic_limit or DEFAULT_TRAFFIC_LIMIT_MB)
+
+        if current_limit <= 0:
+            current_limit = DEFAULT_TRAFFIC_LIMIT_MB
+
+        if current_used >= current_limit:
+            return False, "FREE_TRAFFIC_LIMIT_REACHED"
+
         user.access_type = "free"
         user.is_active = True
 

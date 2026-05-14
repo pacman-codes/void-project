@@ -2,7 +2,7 @@ from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, Message
 from sqlalchemy import func, select, text
 
 from bot.keyboards.user import (
@@ -260,10 +260,52 @@ async def ensure_primary_config_url(telegram_id: int, access_type: str | None) -
         return None
 
 
+def build_free_limit_reached_text(lang: str = "ru") -> str:
+    if lang == "en":
+        return (
+            "⛔️ <b>Free traffic limit is over</b>\n\n"
+            "The free 3 GB limit has already been used.\n\n"
+            "Full access removes the traffic limit and gives you more devices."
+        )
+
+    return (
+        "⛔️ <b>Бесплатный лимит трафика закончился</b>\n\n"
+        "Бесплатный доступ уже использован: <b>3 ГБ</b>.\n\n"
+        "Полный доступ — без лимита по трафику, с максимальной скоростью и большим количеством устройств."
+    )
+
+
+def get_free_limit_reached_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💎 Get full access" if lang == "en" else "💎 Получить полный доступ",
+                    callback_data="subscription_paid",
+                )
+            ]
+        ]
+    )
+
+
 async def build_home_text_and_keyboard(telegram_id: int) -> tuple[str, object, str]:
     user = await get_user_by_telegram_id(telegram_id)
     lang = user.language if user and user.language else "ru"
     access = await get_access_status(telegram_id)
+
+    traffic_used = int(user.traffic_used or 0) if user else 0
+    traffic_limit = int(user.traffic_limit or DEFAULT_TRAFFIC_LIMIT_MB) if user else DEFAULT_TRAFFIC_LIMIT_MB
+
+    if traffic_limit <= 0:
+        traffic_limit = DEFAULT_TRAFFIC_LIMIT_MB
+
+    if (
+        user
+        and user.terms_accepted
+        and user.access_type == "free"
+        and traffic_used >= traffic_limit
+    ):
+        return build_free_limit_reached_text(lang), get_free_limit_reached_keyboard(lang), lang
 
     if not access["has_access"]:
         return get_welcome_text(lang), get_start_inline_keyboard(lang), lang

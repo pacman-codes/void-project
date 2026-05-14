@@ -166,6 +166,16 @@ class VPNService:
         )
 
         if existing_client is not None:
+            if not bool(existing_client.get("enable", True)):
+                updated_result = await self._get_panel_client().update_client_enable(
+                    inbound_id=self.inbound_id,
+                    client_id=str(existing_client["id"]),
+                    enable=True,
+                )
+                updated_client = updated_result.get("client")
+                if updated_client is not None:
+                    existing_client = updated_client
+
             inbound = await self._get_panel_client().get_inbound(self.inbound_id)
             config_url = self._build_config_url(inbound, existing_client)
 

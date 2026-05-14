@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from aiogram import Bot
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from sqlalchemy import select
@@ -12,7 +13,7 @@ from sqlalchemy import select
 from config.config import settings
 from config.runtime import DEV_MODE
 from db.database import async_session_maker
-from db.models import User, VPNAccess
+from db.models import User, UserEvent, VPNAccess
 from services.audit_log_service import log_user_event
 from services.vpn_service import VPNService
 
@@ -57,6 +58,189 @@ def _get_admin_ids() -> set[int]:
             continue
 
     return result
+
+
+async def get_traffic_sync_target_telegram_ids(limit: int = 100) -> list[int]:
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(User.telegram_id)
+            .join(VPNAccess, VPNAccess.user_id == User.id)
+            .where(
+                User.is_active.is_(True),
+                User.access_type.in_(("free", "paid")),
+                VPNAccess.is_active.is_(True),
+            )
+            .distinct()
+            .order_by(User.id.asc())
+            .limit(limit)
+        )
+
+        return [int(item) for item in result.scalars().all()]
+
+
+async def _has_event(
+    *,
+    target_telegram_id: int,
+    event_type: str,
+) -> bool:
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(UserEvent.id)
+            .where(
+                UserEvent.target_telegram_id == target_telegram_id,
+                UserEvent.event_type == event_type,
+                UserEvent.status == "ok",
+            )
+            .limit(1)
+        )
+
+        return result.scalar_one_or_none() is not None
+
+
+async def _send_user_traffic_message(
+    *,
+    telegram_id: int,
+    text: str,
+    event_type: str,
+    source: str,
+    details: dict[str, Any],
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    if await _has_event(target_telegram_id=telegram_id, event_type=event_type):
+        return
+
+    bot = Bot(
+        token=settings.BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+
+    status = "ok"
+    error: str | None = None
+
+    try:
+        await bot.send_message(telegram_id, text, reply_markup=reply_markup)
+    except Exception as exc:
+        status = "error"
+        error = f"{type(exc).__name__}: {exc}"
+    finally:
+        await bot.session.close()
+
+    event_details = dict(details)
+    if error:
+        event_details["error"] = error
+
+    await log_user_event(
+        event_type=event_type,
+        target_telegram_id=telegram_id,
+        actor_telegram_id=None,
+        source=source,
+        status=status,
+        message="Free traffic notification sent" if status == "ok" else "Free traffic notification failed",
+        details=event_details,
+    )
+
+
+async def _maybe_notify_free_traffic_thresholds(
+    *,
+    telegram_id: int,
+    old_used_mb: int,
+    snapshot: dict[str, Any],
+    source: str,
+) -> None:
+    if snapshot.get("access_type") != "free":
+        return
+
+    limit_mb = int(snapshot.get("free_limit_mb") or DEFAULT_FREE_TRAFFIC_LIMIT_MB)
+    used_mb = int(snapshot.get("traffic_used_mb") or 0)
+
+    if limit_mb <= 0:
+        return
+
+    old_percent = (old_used_mb / limit_mb) * 100
+    new_percent = (used_mb / limit_mb) * 100
+
+    details = {
+        "old_used_mb": old_used_mb,
+        "used_mb": used_mb,
+        "limit_mb": limit_mb,
+        "left_mb": snapshot.get("free_left_mb"),
+        "percent_used": snapshot.get("free_percent_used"),
+    }
+
+    if old_percent < 70 <= new_percent < 90:
+        await _send_user_traffic_message(
+            telegram_id=telegram_id,
+            event_type="traffic_free_70_notified",
+            source=source,
+            details=details,
+            text=(
+                "⚠️ <b>Осталось меньше 1 ГБ бесплатного трафика</b>\n\n"
+                "Бесплатный лимит почти израсходован. После 3 ГБ доступ остановится.\n\n"
+                "Полный доступ снимает ограничение по трафику и открывает больше устройств."
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="💎 Получить полный доступ",
+                            callback_data="open_subscription",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+    if old_percent < 90 <= new_percent < 100:
+        await _send_user_traffic_message(
+            telegram_id=telegram_id,
+            event_type="traffic_free_90_notified",
+            source=source,
+            details=details,
+            text=(
+                "⚠️ <b>Бесплатный трафик почти закончился</b>\n\n"
+                "Осталось совсем немного. После достижения лимита доступ остановится.\n\n"
+                "Полный доступ — без лимита по трафику и с большим количеством устройств."
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="💎 Получить полный доступ",
+                            callback_data="open_subscription",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+
+async def _notify_free_access_disabled(
+    *,
+    telegram_id: int,
+    snapshot: dict[str, Any],
+    source: str,
+) -> None:
+    await _send_user_traffic_message(
+        telegram_id=telegram_id,
+        event_type="traffic_free_disabled_notified",
+        source=source,
+        details=snapshot,
+        text=(
+            "⛔️ <b>Бесплатный лимит трафика закончился</b>\n\n"
+            "Бесплатный доступ остановлен, потому что использовано 3 ГБ.\n\n"
+            "Полный доступ — без лимита по трафику, с максимальной скоростью и большим количеством устройств."
+        ),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="💎 Получить полный доступ",
+                        callback_data="open_subscription",
+                    )
+                ]
+            ]
+        ),
+    )
 
 
 def _normalize_free_limit(value: int | None) -> int:
@@ -255,6 +439,7 @@ async def sync_user_traffic_from_panel(
     db_snapshot = panel_snapshot["db_snapshot"]
     old_used_mb = int(db_snapshot.get("traffic_used_mb") or 0)
     new_used_mb = int(panel_snapshot.get("total_mb") or 0)
+    synced_access_count = int(panel_snapshot.get("synced_access_count") or 0)
 
     if panel_snapshot["errors"]:
         await log_user_event(
@@ -269,6 +454,35 @@ async def sync_user_traffic_from_panel(
 
         return {
             "status": "error",
+            "updated": False,
+            "snapshot": db_snapshot,
+            "panel": panel_snapshot,
+        }
+
+    # Important: after free limit is reached, access records are disabled.
+    # In that state panel total becomes 0 because there is nothing active to sync.
+    # Do not overwrite the saved limit-reached traffic value with 0.
+    if synced_access_count == 0 and new_used_mb == 0 and old_used_mb > 0:
+        panel_snapshot["total_mb"] = old_used_mb
+        panel_snapshot["total_gb"] = round(old_used_mb / 1024, 2)
+
+        await log_user_event(
+            event_type="traffic_panel_synced",
+            target_telegram_id=telegram_id,
+            actor_telegram_id=actor_telegram_id,
+            source=source,
+            status="ok",
+            message="Panel traffic sync skipped because there are no active access records",
+            details={
+                "old_used_mb": old_used_mb,
+                "new_used_mb": new_used_mb,
+                "kept_used_mb": old_used_mb,
+                "panel": panel_snapshot,
+            },
+        )
+
+        return {
+            "status": "ok",
             "updated": False,
             "snapshot": db_snapshot,
             "panel": panel_snapshot,
@@ -420,15 +634,16 @@ async def _disable_free_access_due_to_limit(
             continue
 
         if DEV_MODE:
-            skipped.append(label + " — DEV_MODE, panel delete skipped")
+            skipped.append(label + " — DEV_MODE, panel disable skipped")
             continue
 
         try:
-            await service._get_panel_client().delete_client(
+            await service._get_panel_client().update_client_enable(
                 inbound_id=service.inbound_id,
                 client_id=str(client_uuid),
+                enable=False,
             )
-            deleted.append(label)
+            deleted.append(label + " — panel client disabled")
         except Exception as exc:
             errors.append(label + f" — {type(exc).__name__}: {exc}")
 
@@ -472,11 +687,17 @@ async def _disable_free_access_due_to_limit(
         message="Free access disabled because traffic limit was reached",
         details={
             "snapshot": updated_snapshot,
-            "deleted": deleted,
+            "panel_disabled": deleted,
             "skipped": skipped,
             "errors": errors,
             "disabled_access_ids": disabled_access_ids,
         },
+    )
+
+    await _notify_free_access_disabled(
+        telegram_id=telegram_id,
+        snapshot=updated_snapshot,
+        source=source,
     )
 
     return updated_snapshot
@@ -531,6 +752,14 @@ async def set_user_traffic_used(
             "paid_threshold_percent": snapshot["paid_threshold_percent"],
         },
     )
+
+    if old_access_type == "free":
+        await _maybe_notify_free_traffic_thresholds(
+            telegram_id=telegram_id,
+            old_used_mb=old_used,
+            snapshot=snapshot,
+            source=source,
+        )
 
     if old_access_type == "free" and old_used < old_free_limit <= normalized_used:
         await log_user_event(
