@@ -22,7 +22,7 @@ def build_subscription_text(lang: str) -> str:
             "💎 <b>Full access</b>\n"
             "For comfortable daily use\n"
             "• high speed\n"
-            "• from 2 devices\n"
+            "• up to 7 devices available\n"
             "• no limits\n\n"
             "💡 Setup takes less than a minute"
         )
@@ -36,7 +36,7 @@ def build_subscription_text(lang: str) -> str:
         "💎 <b>Полный доступ</b>\n"
         "Для комфортной работы\n"
         "• высокая скорость\n"
-        "• от 2 устройств\n"
+        "• до 7 устройств доступно\n"
         "• без ограничений\n\n"
         "💡 Подключение занимает меньше минуты"
     )
