@@ -71,7 +71,7 @@ async def get_traffic_sync_target_telegram_ids(limit: int = 100) -> list[int]:
                 User.access_type.in_(("free", "paid")),
                 VPNAccess.is_active.is_(True),
             )
-            .distinct()
+            .group_by(User.id, User.telegram_id)
             .order_by(User.id.asc())
             .limit(limit)
         )
