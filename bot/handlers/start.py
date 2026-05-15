@@ -64,7 +64,7 @@ def build_paid_start_text(
         f"{display_name}, спасибо, что с нами! 😏\n\n"
         f"Подписка PRO 🤌 действует до <b>{format_expiry(expiry, lang)}</b>\n\n"
         "Мы ценим вас и стараемся сделать сервис лучше 🍔\n"
-        'Жалобы и предложения <a href="https://t.me/voidModeBot">сюда</a>.\n\n'
+        'Поддержка и предложения: @voidModeSupport.\n\n'
         "Не забудьте вовремя продлить доступ 👇"
     )
 
