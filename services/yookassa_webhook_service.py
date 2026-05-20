@@ -6,6 +6,7 @@ from aiogram.enums import ParseMode
 from sqlalchemy import select
 
 from bot.handlers.start import build_home_text_and_keyboard
+from bot.keyboards.tariffs import get_tariffs_inline_keyboard
 from config.config import settings
 from db.database import async_session_maker
 from db.models import User
@@ -41,6 +42,27 @@ async def send_home_screen_to_user(telegram_id: int) -> None:
             disable_web_page_preview=True,
         )
         logger.info("Sent home screen to user %s after webhook", telegram_id)
+    finally:
+        await bot.session.close()
+
+
+
+async def send_payment_canceled_to_user(telegram_id: int) -> None:
+    bot = Bot(
+        token=settings.BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+    try:
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=(
+                "😕 Оплата не была завершена.\n\n"
+                "Попробуйте ещё раз или используйте другой способ оплаты."
+            ),
+            reply_markup=get_tariffs_inline_keyboard(),
+            disable_web_page_preview=True,
+        )
+        logger.info("Sent payment canceled message to user %s", telegram_id)
     finally:
         await bot.session.close()
 
@@ -233,6 +255,13 @@ async def process_yookassa_notification(payload: dict) -> tuple[int, str]:
             },
         )
         await clear_user_payment_state(telegram_id)
+
+        try:
+            await send_payment_canceled_to_user(telegram_id)
+        except Exception as e:
+            logger.exception("Failed to send payment canceled message to user %s: %s", telegram_id, e)
+            return 200, "payment canceled but push failed"
+
         return 200, "payment canceled"
 
     return 200, "event ignored"
