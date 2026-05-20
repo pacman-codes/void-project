@@ -12,7 +12,12 @@ from config.runtime import DEV_MODE
 from db.database import async_session_maker
 from db.models import User, UserSubscriptionLink, VPNAccess
 from services.vpn_service import VPNService, VPNServiceError
-from services.payment_service import create_redirect_payment, PaymentServiceError
+from services.payment_service import (
+    create_redirect_payment,
+    sync_payment_status,
+    clear_user_payment_state,
+    PaymentServiceError,
+)
 from services.audit_log_service import get_recent_user_events, log_user_event
 from services.expiry_service import expire_paid_users_once
 from services.traffic_service import (
@@ -1340,6 +1345,110 @@ async def admin_clean(message: Message) -> None:
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
+
+
+
+
+def _admin_payment_duration_days(plan_code: str | None) -> int:
+    return {
+        "plan_1m": 30,
+        "plan_6m": 180,
+        "plan_12m": 365,
+    }.get(plan_code or "plan_1m", 30)
+
+
+@router.message(F.text.regexp(r"^/adminPaymentSync(?:@\w+)?(?:\s|$)"))
+async def admin_payment_sync(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    parts = (message.text or "").split()
+
+    if len(parts) >= 2:
+        try:
+            telegram_id = int(parts[1])
+        except ValueError:
+            await message.answer("Формат: /adminPaymentSync [telegram_id]")
+            return
+    else:
+        telegram_id = message.from_user.id
+
+    try:
+        payment = await sync_payment_status(telegram_id)
+    except PaymentServiceError as exc:
+        await message.answer(f"Ошибка оплаты: {exc}")
+        return
+    except Exception as exc:
+        await message.answer(f"Ошибка adminPaymentSync: {type(exc).__name__}: {exc}")
+        return
+
+    payment_id = payment.get("payment_id")
+    payment_status = payment.get("payment_status")
+    payment_kind = payment.get("payment_kind")
+    payment_plan_code = payment.get("payment_plan_code")
+
+    if payment_status != "succeeded":
+        await message.answer(
+            (
+                "Платёж пока не успешный.\n\n"
+                f"Telegram ID: <code>{telegram_id}</code>\n"
+                f"Status: <code>{payment_status}</code>\n"
+                f"Payment ID: <code>{payment_id}</code>"
+            )
+        )
+        return
+
+    if payment_kind != "plan":
+        await message.answer(
+            (
+                "Автодожим сейчас поддерживает только plan-платежи.\n\n"
+                f"Telegram ID: <code>{telegram_id}</code>\n"
+                f"Kind: <code>{payment_kind}</code>\n"
+                f"Payment ID: <code>{payment_id}</code>"
+            )
+        )
+        return
+
+    duration_days = _admin_payment_duration_days(payment_plan_code)
+
+    try:
+        success, activation_message = await activate_paid_for_user(
+            telegram_id,
+            duration_days,
+        )
+    except Exception as exc:
+        await message.answer(f"Ошибка активации: {type(exc).__name__}: {exc}")
+        return
+
+    if not success:
+        await message.answer(f"Платёж успешный, но активация не прошла: {activation_message}")
+        return
+
+    await log_user_event(
+        event_type="payment_succeeded",
+        target_telegram_id=telegram_id,
+        source="admin_payment_sync",
+        status="ok",
+        message="Manual payment sync after successful payment",
+        details={
+            "payment_id": payment_id,
+            "payment_kind": payment_kind,
+            "payment_plan_code": payment_plan_code,
+            "duration_days": duration_days,
+        },
+    )
+
+    await clear_user_payment_state(telegram_id)
+
+    await message.answer(
+        (
+            "✅ Платёж дожат вручную.\n\n"
+            f"Telegram ID: <code>{telegram_id}</code>\n"
+            f"Payment ID: <code>{payment_id}</code>\n"
+            f"Plan: <code>{payment_plan_code}</code>\n"
+            f"Days: <code>{duration_days}</code>"
+        )
+    )
 
 
 @router.message(F.text.regexp(r"^/adminTestPay(?:@\w+)?(?:\s|$)"))
