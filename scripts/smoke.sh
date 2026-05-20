@@ -133,16 +133,89 @@ echo "webhook public route ok: HTTP $code"
 echo "== 9. Subscription endpoints =="
 code="$(curl -k -s -o /tmp/void_smoke_sub_health.out -w '%{http_code}' https://pay.voidmod.space:8443/health)"
 if [ "$code" != "200" ]; then
-  echo "Expected 200 for /health, got $code"
+  echo "Expected 200 for public /health, got $code"
   cat /tmp/void_smoke_sub_health.out || true
   exit 1
 fi
 echo "pay health ok: HTTP $code"
 
-echo "== 10. Nginx config =="
+code="$(curl -s -o /tmp/void_smoke_local_sub.out -w '%{http_code}' http://127.0.0.1:8088/sub/__smoke_fake_token__)"
+if [ "$code" = "502" ] || [ "$code" = "000" ]; then
+  echo "Bad local subscription route /sub/__smoke_fake_token__: HTTP $code"
+  cat /tmp/void_smoke_local_sub.out || true
+  exit 1
+fi
+echo "local subscription route reachable: HTTP $code"
+
+for path in "/sub/__smoke_fake_token__" "/happ/__smoke_fake_token__"; do
+  code="$(curl -k -s -o /tmp/void_smoke_fake_route.out -w '%{http_code}' "https://pay.voidmod.space:8443${path}")"
+  if [ "$code" = "502" ] || [ "$code" = "000" ]; then
+    echo "Bad public subscription route ${path}: HTTP $code"
+    cat /tmp/void_smoke_fake_route.out || true
+    exit 1
+  fi
+  echo "public subscription route ${path} reachable: HTTP $code"
+done
+
+echo "== 10. Business DB checks =="
+python3 - << 'PY'
+import os
+import asyncio
+from pathlib import Path
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import text
+
+env_path = Path(".env")
+if env_path.exists():
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key, value)
+
+async def main():
+    engine = create_async_engine(os.getenv("DATABASE_URL"))
+    async with engine.connect() as conn:
+        active_links = await conn.scalar(text("""
+            SELECT COUNT(*)
+            FROM user_subscription_links
+            WHERE is_active IS true
+        """))
+        print(f"active_subscription_links={active_links}")
+
+        pending_payments = await conn.scalar(text("""
+            SELECT COUNT(*)
+            FROM users
+            WHERE payment_status = 'pending'
+              AND payment_id IS NOT NULL
+        """))
+        print(f"pending_payments={pending_payments}")
+
+        critical_events = await conn.scalar(text("""
+            SELECT COUNT(*)
+            FROM user_events
+            WHERE created_at > (NOW() AT TIME ZONE 'UTC') - INTERVAL '24 hours'
+              AND event_type IN (
+                'payment_activation_failed',
+                'subscription_paid_activation_failed',
+                'subscription_expiry_failed'
+              )
+        """))
+        if critical_events and int(critical_events) > 0:
+            raise SystemExit(f"Critical payment/subscription events in last 24h: {critical_events}")
+
+        print("business db checks ok")
+
+    await engine.dispose()
+
+asyncio.run(main())
+PY
+
+echo "== 11. Nginx config =="
 sudo nginx -t
 
-echo "== 11. Recent critical logs =="
+echo "== 12. Recent critical logs =="
 if journalctl -u voidbot -n 120 --no-pager -l | grep -Ei "Traceback|ImportError|ModuleNotFoundError|CRITICAL" >/tmp/void_smoke_bot_errors.out; then
   echo "Recent bot critical errors found:"
   cat /tmp/void_smoke_bot_errors.out
