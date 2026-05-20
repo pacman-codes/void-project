@@ -6,7 +6,7 @@ from aiogram.enums import ParseMode
 from sqlalchemy import select
 
 from bot.handlers.start import build_home_text_and_keyboard
-from bot.keyboards.tariffs import get_tariffs_inline_keyboard
+from bot.keyboards.tariffs import get_tariff_inline_keyboard
 from config.config import settings
 from db.database import async_session_maker
 from db.models import User
@@ -59,7 +59,7 @@ async def send_payment_canceled_to_user(telegram_id: int) -> None:
                 "😕 Оплата не была завершена.\n\n"
                 "Попробуйте ещё раз или используйте другой способ оплаты."
             ),
-            reply_markup=get_tariffs_inline_keyboard(),
+            reply_markup=get_tariff_inline_keyboard(),
             disable_web_page_preview=True,
         )
         logger.info("Sent payment canceled message to user %s", telegram_id)

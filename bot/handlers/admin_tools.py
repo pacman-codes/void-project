@@ -12,6 +12,7 @@ from config.runtime import DEV_MODE
 from db.database import async_session_maker
 from db.models import User, UserSubscriptionLink, VPNAccess
 from services.vpn_service import VPNService, VPNServiceError
+from services.payment_service import create_redirect_payment, PaymentServiceError
 from services.audit_log_service import get_recent_user_events, log_user_event
 from services.expiry_service import expire_paid_users_once
 from services.traffic_service import (
@@ -1337,6 +1338,50 @@ async def admin_clean(message: Message) -> None:
         lines.append("DB-доступы и подписочные ссылки отключены.")
 
     await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+
+
+@router.message(F.text.regexp(r"^/adminTestPay(?:@\w+)?(?:\s|$)"))
+async def admin_test_pay(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    parts = (message.text or "").split()
+
+    amount = 10
+
+    if len(parts) >= 2:
+        try:
+            amount = int(parts[1])
+        except ValueError:
+            await message.answer("Формат: /adminTestPay [amount]")
+            return
+
+    try:
+        payment = await create_redirect_payment(
+            user_id=message.from_user.id,
+            amount_rub=amount,
+            description=f"🧪 TEST {amount} RUB",
+            kind="plan",
+            plan_code="plan_1m",
+        )
+    except PaymentServiceError as exc:
+        await message.answer(f"Ошибка оплаты: {exc}")
+        return
+    except Exception as exc:
+        await message.answer(f"Ошибка adminTestPay: {type(exc).__name__}: {exc}")
+        return
+
+    await message.answer(
+        (
+            f"🧪 TEST PAYMENT\\n\\n"
+            f"Amount: {amount} RUB\\n"
+            f"Payment ID: <code>{payment['payment_id']}</code>\\n\\n"
+            f"{payment['payment_confirmation_url']}"
+        ),
+        disable_web_page_preview=True,
+    )
 
 
 @router.message(F.text.regexp(r"^/adminPaid(?:@\w+)?(?:\s|$)"))
