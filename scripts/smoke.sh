@@ -4,6 +4,10 @@ set -euo pipefail
 PROJECT_DIR="/home/vpn/telegram_bot"
 cd "$PROJECT_DIR"
 
+if [ -f "$PROJECT_DIR/venv/bin/activate" ]; then
+  source "$PROJECT_DIR/venv/bin/activate"
+fi
+
 echo "== 1. Python compile =="
 python3 -m py_compile main.py webhook_server.py
 python3 -m compileall -q bot services config db scripts
@@ -208,6 +212,50 @@ async def main():
         print("business db checks ok")
 
     await engine.dispose()
+
+asyncio.run(main())
+PY
+
+echo "== 10b. External API checks =="
+python3 - << 'PY'
+import os
+import asyncio
+from pathlib import Path
+import httpx
+
+env_path = Path(".env")
+if env_path.exists():
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key, value)
+
+async def main():
+    bot_token = os.getenv("BOT_TOKEN")
+    yookassa_shop_id = os.getenv("YOOKASSA_SHOP_ID")
+    yookassa_secret_key = os.getenv("YOOKASSA_SECRET_KEY")
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        tg_response = await client.get(f"https://api.telegram.org/bot{bot_token}/getMe")
+        if tg_response.status_code != 200:
+            raise SystemExit(f"Telegram getMe failed: HTTP {tg_response.status_code}")
+        tg_data = tg_response.json()
+        if not tg_data.get("ok"):
+            raise SystemExit(f"Telegram getMe returned ok=false: {tg_data}")
+        username = (tg_data.get("result") or {}).get("username")
+        print(f"telegram api ok: @{username}")
+
+        yk_response = await client.get(
+            "https://api.yookassa.ru/v3/payments?limit=1",
+            auth=(yookassa_shop_id, yookassa_secret_key),
+        )
+        if yk_response.status_code in {401, 403}:
+            raise SystemExit(f"YooKassa credentials check failed: HTTP {yk_response.status_code}")
+        if yk_response.status_code < 200 or yk_response.status_code >= 500:
+            raise SystemExit(f"YooKassa API unexpected status: HTTP {yk_response.status_code}")
+        print(f"yookassa api reachable: HTTP {yk_response.status_code}")
 
 asyncio.run(main())
 PY
