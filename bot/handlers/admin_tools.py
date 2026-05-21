@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import html
 from datetime import datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.types import Message
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from config.runtime import DEV_MODE
 from db.database import async_session_maker
@@ -1355,6 +1356,256 @@ def _admin_payment_duration_days(plan_code: str | None) -> int:
         "plan_6m": 180,
         "plan_12m": 365,
     }.get(plan_code or "plan_1m", 30)
+
+
+
+
+async def _admin_run_command(*args: str, timeout: int = 60) -> tuple[int, str]:
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd="/home/vpn/telegram_bot",
+    )
+
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        return 124, f"Command timed out after {timeout}s: {' '.join(args)}"
+
+    return proc.returncode or 0, stdout.decode("utf-8", errors="replace")
+
+
+def _clip_admin_output(value: str, limit: int = 3500) -> str:
+    if len(value) <= limit:
+        return value
+    return value[-limit:]
+
+
+@router.message(F.text.regexp(r"^/adminHealth(?:@\w+)?(?:\s|$)"))
+async def admin_health(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    lines: list[str] = ["<b>VOID health</b>", ""]
+
+    for service_name in ("voidbot", "voidbot-webhook", "void-subscription"):
+        code, output = await _admin_run_command(
+            "systemctl",
+            "is-active",
+            service_name,
+            timeout=10,
+        )
+        status = output.strip() or "unknown"
+        marker = "✅" if code == 0 and status == "active" else "❌"
+        lines.append(f"{marker} <code>{service_name}</code>: <code>{html.escape(status)}</code>")
+
+    async with async_session_maker() as session:
+        pending_payments = await session.scalar(
+            text("""
+                SELECT COUNT(*)
+                FROM users
+                WHERE payment_status = 'pending'
+                  AND payment_id IS NOT NULL
+            """)
+        )
+        active_links = await session.scalar(
+            text("""
+                SELECT COUNT(*)
+                FROM user_subscription_links
+                WHERE is_active IS true
+            """)
+        )
+        active_paid_subscriptions = await session.scalar(
+            text("""
+                SELECT COUNT(*)
+                FROM users
+                WHERE access_type = 'paid'
+                  AND subscription_expiry IS NOT NULL
+                  AND subscription_expiry > (NOW() AT TIME ZONE 'UTC')
+            """)
+        )
+        critical_events = await session.scalar(
+            text("""
+                SELECT COUNT(*)
+                FROM user_events
+                WHERE created_at > (NOW() AT TIME ZONE 'UTC') - INTERVAL '24 hours'
+                  AND event_type IN (
+                    'payment_activation_failed',
+                    'subscription_paid_activation_failed',
+                    'subscription_expiry_failed'
+                  )
+            """)
+        )
+        last_payment = await session.execute(
+            text("""
+                SELECT created_at, event_type, status, message
+                FROM user_events
+                WHERE event_type IN (
+                  'payment_created',
+                  'webhook_received',
+                  'payment_succeeded',
+                  'payment_canceled',
+                  'subscription_paid_activated'
+                )
+                ORDER BY created_at DESC
+                LIMIT 1
+            """)
+        )
+        last_payment_row = last_payment.fetchone()
+
+    lines.extend([
+        "",
+        f"🔥 active_paid_subscriptions: <code>{active_paid_subscriptions or 0}</code>",
+        f"active_subscription_links: <code>{active_links or 0}</code>",
+        f"pending_payments: <code>{pending_payments or 0}</code>",
+        f"critical_events_24h: <code>{critical_events or 0}</code>",
+    ])
+
+    if last_payment_row:
+        lines.extend([
+            "",
+            "<b>Last payment event</b>",
+            f"time: <code>{html.escape(str(last_payment_row[0]))}</code>",
+            f"type: <code>{html.escape(str(last_payment_row[1]))}</code>",
+            f"status: <code>{html.escape(str(last_payment_row[2]))}</code>",
+            f"message: <code>{html.escape(str(last_payment_row[3]))}</code>",
+        ])
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(F.text.regexp(r"^/adminSmoke(?:@\w+)?(?:\s|$)"))
+async def admin_smoke(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    await message.answer("Запускаю smoke-check. Это может занять немного времени.")
+
+    code, output = await _admin_run_command(
+        "./scripts/smoke.sh",
+        timeout=120,
+    )
+
+    marker = "✅" if code == 0 else "❌"
+    await message.answer(
+        (
+            f"{marker} <b>Smoke result</b>: <code>{code}</code>\n\n"
+            f"<pre>{html.escape(_clip_admin_output(output))}</pre>"
+        ),
+        parse_mode="HTML",
+    )
+
+
+@router.message(F.text.regexp(r"^/adminPaymentCleanup(?:@\w+)?(?:\s|$)"))
+async def admin_payment_cleanup(message: Message) -> None:
+    if not is_admin(message):
+        return
+
+    parts = (message.text or "").split()
+    limit = 20
+
+    if len(parts) >= 2:
+        try:
+            limit = max(1, min(int(parts[1]), 100))
+        except ValueError:
+            await message.answer("Формат: /adminPaymentCleanup [limit]")
+            return
+
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(User.telegram_id, User.payment_id)
+            .where(
+                User.payment_status == "pending",
+                User.payment_id.is_not(None),
+            )
+            .order_by(User.id.desc())
+            .limit(limit)
+        )
+        rows = list(result.all())
+
+    if not rows:
+        await message.answer("✅ Pending-платежей нет.")
+        return
+
+    cleared: list[str] = []
+    kept: list[str] = []
+    errors: list[str] = []
+
+    for telegram_id, payment_id in rows:
+        try:
+            payment = await sync_payment_status(int(telegram_id))
+            status = payment.get("payment_status")
+
+            if status == "succeeded":
+                kept.append(f"{telegram_id}: succeeded, use /adminPaymentSync {telegram_id}")
+                continue
+
+            if status in {"canceled", "expired"}:
+                await log_user_event(
+                    event_type="payment_canceled",
+                    target_telegram_id=int(telegram_id),
+                    source="admin_payment_cleanup",
+                    status="cleared",
+                    message="Pending payment cleared by admin cleanup",
+                    details={
+                        "payment_id": payment_id,
+                        "payment_status": status,
+                    },
+                )
+                await clear_user_payment_state(int(telegram_id))
+                cleared.append(f"{telegram_id}: {status}")
+                continue
+
+            kept.append(f"{telegram_id}: {status}")
+
+        except PaymentServiceError as exc:
+            text_error = str(exc)
+            if "HTTP 404" in text_error:
+                await log_user_event(
+                    event_type="payment_canceled",
+                    target_telegram_id=int(telegram_id),
+                    source="admin_payment_cleanup",
+                    status="cleared",
+                    message="Stale pending payment cleared after YooKassa HTTP 404",
+                    details={
+                        "payment_id": payment_id,
+                        "reason": "yookassa_http_404",
+                    },
+                )
+                await clear_user_payment_state(int(telegram_id))
+                cleared.append(f"{telegram_id}: yookassa_http_404")
+            else:
+                errors.append(f"{telegram_id}: {text_error}")
+        except Exception as exc:
+            errors.append(f"{telegram_id}: {type(exc).__name__}: {exc}")
+
+    lines = [
+        "<b>Payment cleanup</b>",
+        f"checked: <code>{len(rows)}</code>",
+        f"cleared: <code>{len(cleared)}</code>",
+        f"kept: <code>{len(kept)}</code>",
+        f"errors: <code>{len(errors)}</code>",
+        "",
+    ]
+
+    if cleared:
+        lines.append("<b>Cleared</b>")
+        lines.extend(f"• <code>{html.escape(item)}</code>" for item in cleared[:20])
+        lines.append("")
+
+    if kept:
+        lines.append("<b>Kept</b>")
+        lines.extend(f"• <code>{html.escape(item)}</code>" for item in kept[:20])
+        lines.append("")
+
+    if errors:
+        lines.append("<b>Errors</b>")
+        lines.extend(f"• <code>{html.escape(item)}</code>" for item in errors[:20])
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @router.message(F.text.regexp(r"^/adminPaymentSync(?:@\w+)?(?:\s|$)"))

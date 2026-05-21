@@ -44,6 +44,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
   echo "Would run:"
   echo "  git pull"
   echo "  alembic upgrade head"
+  echo "  ./scripts/smoke.sh"
   echo "  sudo systemctl restart $BOT_SERVICE_NAME"
   echo "  sudo systemctl restart $WEBHOOK_SERVICE_NAME"
   echo "  systemctl --no-pager --full status $BOT_SERVICE_NAME | sed -n '1,20p'"
@@ -64,31 +65,35 @@ echo "== STEP 3: alembic upgrade head =="
 alembic upgrade head
 echo
 
-echo "== STEP 4: restart bot service =="
+echo "== STEP 4: smoke check before restart =="
+./scripts/smoke.sh
+echo
+
+echo "== STEP 5: restart bot service =="
 sudo systemctl restart "$BOT_SERVICE_NAME"
 echo
 
-echo "== STEP 5: restart webhook service =="
+echo "== STEP 6: restart webhook service =="
 sudo systemctl restart "$WEBHOOK_SERVICE_NAME"
 echo
 
-echo "== STEP 6: bot service status =="
+echo "== STEP 7: bot service status =="
 systemctl --no-pager --full status "$BOT_SERVICE_NAME" | sed -n '1,20p'
 echo
 
-echo "== STEP 7: webhook service status =="
+echo "== STEP 8: webhook service status =="
 systemctl --no-pager --full status "$WEBHOOK_SERVICE_NAME" | sed -n '1,20p'
 echo
 
-echo "== STEP 8: current revision =="
+echo "== STEP 9: current revision =="
 alembic current
 echo
 
-echo "== STEP 9: recent bot logs =="
+echo "== STEP 10: recent bot logs =="
 journalctl -u "$BOT_SERVICE_NAME" -n 30 --no-pager
 echo
 
-echo "== STEP 10: recent webhook logs =="
+echo "== STEP 11: recent webhook logs =="
 journalctl -u "$WEBHOOK_SERVICE_NAME" -n 30 --no-pager
 echo
 
