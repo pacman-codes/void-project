@@ -2,6 +2,12 @@
 set -euo pipefail
 
 PROJECT_DIR="/home/vpn/telegram_bot"
+NO_SUDO=false
+
+if [ "${1:-}" = "--no-sudo" ]; then
+  NO_SUDO=true
+fi
+
 cd "$PROJECT_DIR"
 
 if [ -f "$PROJECT_DIR/venv/bin/activate" ]; then
@@ -261,7 +267,11 @@ asyncio.run(main())
 PY
 
 echo "== 11. Nginx config =="
-sudo nginx -t
+if [ "$NO_SUDO" = "true" ]; then
+  echo "nginx config check skipped in --no-sudo mode"
+else
+  sudo nginx -t
+fi
 
 echo "== 12. Recent critical logs =="
 if journalctl -u voidbot -n 120 --no-pager -l | grep -Ei "Traceback|ImportError|ModuleNotFoundError|CRITICAL" >/tmp/void_smoke_bot_errors.out; then

@@ -1486,6 +1486,7 @@ async def admin_smoke(message: Message) -> None:
 
     code, output = await _admin_run_command(
         "./scripts/smoke.sh",
+        "--no-sudo",
         timeout=120,
     )
 
