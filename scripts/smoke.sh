@@ -297,6 +297,9 @@ async def main():
 asyncio.run(main())
 PY
 
+echo "== 10d. Backup freshness check =="
+MAX_AGE_HOURS=24 ./scripts/backup_check.sh
+
 echo "== 11. Nginx config =="
 if [ "$NO_SUDO" = "true" ]; then
   echo "nginx config check skipped in --no-sudo mode"
