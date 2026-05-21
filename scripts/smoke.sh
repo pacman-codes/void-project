@@ -266,6 +266,37 @@ async def main():
 asyncio.run(main())
 PY
 
+echo "== 10c. Panel API checks =="
+python3 - << 'PY'
+import asyncio
+
+from services.panel_client import PanelClient
+
+INBOUND_ID = 8
+
+async def main():
+    panel = PanelClient()
+
+    two_factor = await panel.get_two_factor_enabled()
+    if two_factor:
+        raise SystemExit("Panel 2FA is enabled")
+
+    client = await panel.login()
+
+    try:
+        inbound = await panel.get_inbound_info(INBOUND_ID)
+    finally:
+        await client.aclose()
+
+    print(f"panel login ok: {panel.origin}")
+    print(f"inbound ok: id={inbound.id}")
+    print(f"inbound clients count: {len(inbound.clients)}")
+    print(f"inbound enable={inbound.enable}")
+    print(f"inbound protocol={inbound.protocol}")
+
+asyncio.run(main())
+PY
+
 echo "== 11. Nginx config =="
 if [ "$NO_SUDO" = "true" ]; then
   echo "nginx config check skipped in --no-sudo mode"
