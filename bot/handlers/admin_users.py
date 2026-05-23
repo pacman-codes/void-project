@@ -214,11 +214,25 @@ async def admin_users_handler(message: Message) -> None:
 
         lines.append(f"• {telegram_id} {profile} {html.escape(tail)}")
 
-    output = "\n".join(lines)
+    chunks = []
+    current = ""
 
-    for i in range(0, len(output), 3500):
+    for line in lines:
+        next_line = line if not current else current + "\n" + line
+
+        if len(next_line) > 3400:
+            if current:
+                chunks.append(current)
+            current = line
+        else:
+            current = next_line
+
+    if current:
+        chunks.append(current)
+
+    for chunk in chunks:
         await message.answer(
-            output[i:i + 3500],
+            chunk,
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
