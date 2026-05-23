@@ -36,6 +36,18 @@ PY
 
 pg_dump "$PG_DUMP_URL" > "$BACKUP_DIR/botdb.sql"
 
+echo "== Project files snapshot =="
+tar -C "$(dirname "$PROJECT_DIR")" -czf "$BACKUP_DIR/project_files.tar.gz" \
+  --exclude="telegram_bot/venv" \
+  --exclude="telegram_bot/.git" \
+  --exclude="telegram_bot/__pycache__" \
+  --exclude="telegram_bot/**/__pycache__" \
+  --exclude="telegram_bot/*.pyc" \
+  --exclude="telegram_bot/**/*.pyc" \
+  --exclude="telegram_bot/bot.log" \
+  --exclude="telegram_bot/.env.dev" \
+  telegram_bot
+
 echo "== Project env/system configs =="
 cp .env "$BACKUP_DIR/env.prod"
 cp -a /etc/systemd/system/voidbot.service "$BACKUP_DIR/voidbot.service" 2>/dev/null || true
@@ -57,6 +69,7 @@ project_dir=$PROJECT_DIR
 git_head=$(cat "$BACKUP_DIR/git_head.txt")
 files:
 - botdb.sql
+- project_files.tar.gz
 - env.prod
 - systemd unit files
 - nginx sites
