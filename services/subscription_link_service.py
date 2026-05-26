@@ -8,6 +8,8 @@ from sqlalchemy import select
 
 from db.database import async_session_maker
 from db.models import User, UserSubscriptionLink, VPNAccess
+from urllib.parse import quote, urlsplit, urlunsplit
+import re
 
 
 RAW_KEY_GRACE_DAYS = 5
@@ -85,6 +87,38 @@ async def get_or_create_subscription_link(telegram_id: int) -> UserSubscriptionL
         raise SubscriptionLinkError("Не удалось создать уникальную ссылку подписки")
 
 
+def _build_subscription_profile_name(user) -> str:
+    username = getattr(user, "username", None)
+    telegram_id = getattr(user, "telegram_id", None)
+
+    if username:
+        raw = str(username).strip().lstrip("@")
+    elif telegram_id:
+        raw = f"id{telegram_id}"
+    else:
+        raw = "user"
+
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("-_.")
+    if not safe:
+        safe = "user"
+
+    return f"void-{safe}"
+
+
+def _with_subscription_profile_name(config_url: str, profile_name: str) -> str:
+    if not config_url.startswith("vless://"):
+        return config_url
+
+    parts = urlsplit(config_url)
+    return urlunsplit((
+        parts.scheme,
+        parts.netloc,
+        parts.path,
+        parts.query,
+        quote(profile_name, safe="-_."),
+    ))
+
+
 async def build_subscription_by_token(token: str) -> str:
     async with async_session_maker() as session:
         link_result = await session.execute(
@@ -114,12 +148,33 @@ async def build_subscription_by_token(token: str) -> str:
             .where(
                 VPNAccess.user_id == user.id,
                 VPNAccess.is_active.is_(True),
-                VPNAccess.device_number == 1,
+                VPNAccess.config_url.is_not(None),
             )
             .order_by(VPNAccess.id.asc())
         )
-        rows = access_result.scalars().all()
-        config_urls = [row.config_url for row in rows if row.config_url]
+        rows = list(access_result.scalars().all())
+
+        migration_urls = [
+            row.config_url
+            for row in rows
+            if row.config_url and ":8449" in row.config_url
+        ]
+
+        legacy_urls = [
+            row.config_url
+            for row in rows
+            if row.config_url and ":8449" not in row.config_url
+        ]
+
+        # Soft migration rule:
+        # if the user has a rescue 8449 access, subscription returns only that.
+        # old 443 access stays active in DB/panel until a later cleanup step.
+        config_urls = migration_urls or legacy_urls
+        profile_name = _build_subscription_profile_name(user)
+        config_urls = [
+            _with_subscription_profile_name(config_url, profile_name)
+            for config_url in config_urls
+        ]
 
         if not config_urls:
             raise SubscriptionLinkError("Активные ключи не найдены")
