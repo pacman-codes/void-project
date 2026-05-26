@@ -1,4 +1,5 @@
 from decimal import Decimal
+import logging
 import asyncio
 from datetime import datetime, timedelta
 
@@ -69,6 +70,7 @@ from services.vpn_service import VPNService, VPNServiceError
 from utils.buttons import RENEW_EN, RENEW_RU, SUBSCRIPTION_EN, SUBSCRIPTION_RU
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 
 def format_subscription_expiry(value, lang: str) -> str:
@@ -161,38 +163,77 @@ def build_subscription_link_keyboard(lang: str, happ_url: str) -> InlineKeyboard
     return builder.as_markup()
 
 
+async def has_existing_active_config(telegram_id: int) -> bool:
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(VPNAccess.id)
+            .join(User, User.id == VPNAccess.user_id)
+            .where(
+                User.telegram_id == telegram_id,
+                VPNAccess.is_active.is_(True),
+                VPNAccess.config_url.isnot(None),
+                VPNAccess.config_url.like("vless://%"),
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+
 async def ensure_access_before_subscription_link(telegram_id: int) -> tuple[bool, str]:
+    # DIRECT EXISTING CONFIG GUARD BEFORE PANEL
+    # If the user already has an active config in DB, do not call PanelClient.
+    try:
+        from sqlalchemy import select as _select
+        from db.database import async_session_maker as _async_session_maker
+        from db.models import User as _User, VPNAccess as _VPNAccess
+
+        _telegram_id = int(telegram_id)
+
+        async with _async_session_maker() as _session:
+            _existing_result = await _session.execute(
+                _select(_VPNAccess.id)
+                .join(_User, _User.id == _VPNAccess.user_id)
+                .where(
+                    _User.telegram_id == _telegram_id,
+                    _VPNAccess.is_active.is_(True),
+                    _VPNAccess.config_url.isnot(None),
+                    _VPNAccess.config_url.like("vless://%"),
+                )
+                .limit(1)
+            )
+            if _existing_result.scalar_one_or_none() is not None:
+                return True, "OK"
+    except Exception as exc:
+        print(f"DIRECT EXISTING CONFIG GUARD failed: {exc}")
+
     access = await get_access_status(telegram_id)
     access_type = access.get("access_type")
 
     if not access.get("has_access"):
         return False, "Доступ не активен"
 
+    if await has_existing_active_config(telegram_id):
+        return True, "OK"
+
     try:
         service = VPNService()
 
-        if access_type == "free":
-            await service.ensure_vpn_access_record(
+        if access_type in {"free", "paid"}:
+            await service.ensure_migration_8449_access_record(
                 telegram_id=telegram_id,
                 device_number=1,
-                device_name="Устройство 1",
-            )
-            return True, "OK"
-
-        if access_type == "paid":
-            await service.ensure_vpn_access_record(
-                telegram_id=telegram_id,
-                device_number=1,
-                device_name="Устройство 1",
+                device_name="Новое подключение",
             )
             return True, "OK"
 
         return False, "Доступ не активен"
 
     except VPNServiceError as exc:
+        logger.exception("VPNServiceError while preparing subscription link for telegram_id=%s", telegram_id)
         return False, str(exc)
-    except Exception:
-        return False, "Не удалось подготовить подписочную ссылку"
+    except Exception as exc:
+        logger.exception("Unexpected error while preparing subscription link for telegram_id=%s", telegram_id)
+        return False, f"Не удалось подготовить подписочную ссылку: {type(exc).__name__}: {exc}"
 
 async def send_subscription_link_screen(target: Message | CallbackQuery) -> None:
     lang = await get_lang(target.from_user.id)
