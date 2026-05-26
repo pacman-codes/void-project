@@ -176,20 +176,68 @@ class PanelClient:
 
         return data
 
-    async def _get_two_factor_enabled_with_client(self, client: httpx.AsyncClient) -> bool:
-        data = await self._request_json(
-            client,
-            "POST",
-            "/getTwoFactorEnable",
-            json_data={},
-        )
+    async def _get_two_factor_enabled_with_client(self, client) -> bool:
+        """Return panel 2FA state.
 
-        if not data.get("success"):
-            raise PanelRequestError(
-                f"Панель вернула success=false при проверке двухфакторки: {data}"
+        3XUI 3.1 FALLBACK:
+        Some newer 3x-ui builds no longer expose /getTwoFactorEnable.
+        If that probe returns 403/404, continue with normal password login.
+        """
+        try:
+            data = await self._request_json(
+                client,
+                "GET",
+                "/getTwoFactorEnable",
             )
+        except PanelRequestError as exc:
+            message = str(exc)
+            if "HTTP 403" in message or "HTTP 404" in message:
+                print(f"Panel /getTwoFactorEnable unavailable, continuing without 2FA probe: {exc}")
+                return False
+            raise
 
-        return bool(data.get("obj"))
+        if isinstance(data, dict):
+            value = data.get("obj")
+            if value is None:
+                value = data.get("data")
+            if value is None:
+                value = data.get("enable")
+            return bool(value)
+
+        return False
+
+    async def _get_csrf_token_with_client(self, client) -> str | None:
+        """Fetch CSRF token required by newer 3x-ui POST endpoints.
+
+        3XUI CSRF LOGIN SUPPORT:
+        Newer 3x-ui frontend calls /csrf-token before /login and sends
+        X-CSRF-Token with the login request.
+        """
+        try:
+            response = await client.get(
+                self._url("/csrf-token"),
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+        except Exception as exc:
+            print(f"Panel /csrf-token request failed, continuing without CSRF: {exc}")
+            return None
+
+        if response.status_code >= 400:
+            print(f"Panel /csrf-token returned HTTP {response.status_code}, continuing without CSRF")
+            return None
+
+        try:
+            data = response.json()
+        except Exception as exc:
+            print(f"Panel /csrf-token returned non-JSON response, continuing without CSRF: {exc}")
+            return None
+
+        token = data.get("obj") if isinstance(data, dict) else None
+        if isinstance(token, str) and token:
+            return token
+
+        return None
+
 
     async def get_two_factor_enabled(self) -> bool:
         async with await self._build_client() as client:
@@ -199,6 +247,7 @@ class PanelClient:
         client = await self._build_client()
 
         try:
+            csrf_token = await self._get_csrf_token_with_client(client)
             two_factor_enabled = await self._get_two_factor_enabled_with_client(client)
             if two_factor_enabled:
                 await client.aclose()
@@ -207,16 +256,33 @@ class PanelClient:
                     "На текущем шаге код работает только без 2FA."
                 )
 
-            data = await self._request_json(
-                client,
-                "POST",
-                "/login",
-                json_data={
+            login_headers = {"X-Requested-With": "XMLHttpRequest"}
+            if csrf_token:
+                login_headers["X-CSRF-Token"] = csrf_token
+
+            response = await client.post(
+                self._url("/login"),
+                data={
                     "username": self.username,
                     "password": self.password,
                     "twoFactorCode": "",
                 },
+                headers=login_headers,
             )
+
+            if response.status_code >= 400:
+                raise PanelRequestError(
+                    f"Панель вернула HTTP {response.status_code} для {response.url}. "
+                    f"Body: {response.text[:500]}"
+                )
+
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise PanelRequestError(
+                    f"Панель вернула не JSON для {response.url}. "
+                    f"Body: {response.text[:500]}"
+                ) from exc
 
             if not data.get("success"):
                 await client.aclose()
