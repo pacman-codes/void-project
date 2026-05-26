@@ -1,3 +1,4 @@
+import os
 import uuid
 from urllib.parse import quote, urlparse
 
@@ -11,6 +12,11 @@ from services.panel_client import PanelClient
 from config.runtime import DEV_MODE, PANEL_ENABLED
 
 
+MAIN_INBOUND_ID = 8  # fallback; PANEL_INBOUND_ID env override is used by VPNService
+MIGRATION_INBOUND_ID = 9
+MIGRATION_SERVER_NAME = "migration-8449"
+
+
 class VPNServiceError(Exception):
     """Ошибка сервиса выдачи доступа."""
 
@@ -18,7 +24,8 @@ class VPNServiceError(Exception):
 class VPNService:
     def __init__(self) -> None:
         self.panel_client: PanelClient | None = None
-        self.inbound_id = 8
+        # PANEL_INBOUND_ID env override.
+        self.inbound_id = int(os.getenv("PANEL_INBOUND_ID", str(MAIN_INBOUND_ID)))
         self.server_name = "main"
 
     def _get_panel_client(self) -> PanelClient:
@@ -98,9 +105,17 @@ class VPNService:
             raise VPNServiceError("Не найден serverName / serverNames в inbound")
 
         short_ids = reality_settings.get("shortIds", [])
-        short_id = ""
-        if isinstance(short_ids, list) and short_ids:
-            short_id = str(short_ids[0])
+        short_id = os.getenv("PANEL_REALITY_SHORT_ID", "").strip()
+        if not short_id and isinstance(short_ids, list) and short_ids:
+            # 3x-ui subscription export uses the last generated shortId.
+            short_id = str(short_ids[-1])
+
+        spider_x = (
+            os.getenv("PANEL_REALITY_SPIDER_X", "").strip()
+            or reality_inner_settings.get("spiderX")
+            or reality_settings.get("spiderX")
+            or "/"
+        )
 
         network = stream_settings.get("network", "tcp") or "tcp"
         security = stream_settings.get("security", "reality") or "reality"
@@ -113,11 +128,6 @@ class VPNService:
         email = client.get("email", "access")
         tag = quote(f"{self.server_name}-{email}")
 
-        # PROD Reality parameters verified against working client config.
-        server_name = "www.yahoo.com"
-        short_id = "8dec10580aa799e2"
-        spider_x = "/BB06vv9Hc0FIARY"
-
         query_parts = [
             f"type={quote(str(network))}",
             "encryption=none",
@@ -126,7 +136,7 @@ class VPNService:
             f"fp={quote(str(fingerprint))}",
             f"sni={quote(str(server_name))}",
             f"sid={quote(str(short_id))}",
-            f"spx={quote(str(spider_x))}",
+            f"spx={quote(str(spider_x), safe='/')}",
         ]
 
         config_url = f"vless://{client_id}@{address}:{port}?{'&'.join(query_parts)}#{tag}"
@@ -431,6 +441,90 @@ class VPNService:
                 "client_uuid": slot_result["client_uuid"],
                 "config_url": slot_result["config_url"],
                 "created_in_panel": slot_result["created_in_panel"],
+                "is_active": True,
+            }
+
+    async def ensure_migration_8449_access_record(
+        self,
+        telegram_id: int,
+        device_number: int = 1,
+        device_name: str | None = None,
+    ) -> dict:
+        """Create or refresh a parallel rescue access on inbound 9 / port 8449.
+
+        This does not delete or disable old 443 access records.
+        It is used for soft migration when the user opens the subscription link screen.
+        """
+        email = f"user_{telegram_id}_{device_number}_m8449"
+        db_device_number = 100 + device_number
+
+        old_inbound_id = self.inbound_id
+        old_server_name = self.server_name
+
+        try:
+            self.inbound_id = MIGRATION_INBOUND_ID
+            self.server_name = MIGRATION_SERVER_NAME
+
+            panel_result = await self.create_vpn_user(
+                telegram_id=telegram_id,
+                device_number=device_number,
+                email=email,
+            )
+        finally:
+            self.inbound_id = old_inbound_id
+            self.server_name = old_server_name
+
+        client = panel_result["client"]
+        config_url = panel_result["config_url"]
+
+        async with async_session_maker() as session:
+            user_result = await session.execute(
+                select(User).where(User.telegram_id == telegram_id)
+            )
+            user = user_result.scalar_one_or_none()
+
+            if user is None:
+                raise VPNServiceError(f"Пользователь с telegram_id={telegram_id} не найден в БД")
+
+            access_result = await session.execute(
+                select(VPNAccess).where(
+                    VPNAccess.user_id == user.id,
+                    VPNAccess.external_id == email,
+                )
+            )
+            access = access_result.scalar_one_or_none()
+
+            if access is None:
+                access = VPNAccess(
+                    user_id=user.id,
+                    server_name=MIGRATION_SERVER_NAME,
+                    external_id=client["email"],
+                    client_uuid=client["id"],
+                    config_url=config_url,
+                    is_active=True,
+                    device_number=db_device_number,
+                    device_name=device_name or "Новое подключение",
+                )
+                session.add(access)
+            else:
+                access.server_name = MIGRATION_SERVER_NAME
+                access.external_id = client["email"]
+                access.client_uuid = client["id"]
+                access.config_url = config_url
+                access.is_active = True
+                access.device_number = db_device_number
+                if device_name:
+                    access.device_name = device_name
+
+            await session.commit()
+
+            return {
+                "user_id": user.id,
+                "device_number": db_device_number,
+                "external_id": client["email"],
+                "client_uuid": client["id"],
+                "config_url": config_url,
+                "created_in_panel": panel_result["created"],
                 "is_active": True,
             }
 

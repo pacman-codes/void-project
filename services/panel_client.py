@@ -470,6 +470,11 @@ class PanelClient:
         if sub_id is None:
             sub_id = self._generate_sub_id()
 
+        try:
+            tg_id_value = int(str(tg_id).strip()) if str(tg_id).strip() else 0
+        except ValueError:
+            tg_id_value = 0
+
         client_payload = {
             "id": client_id,
             "email": email,
@@ -477,7 +482,7 @@ class PanelClient:
             "totalGB": self._total_gb_to_bytes(total_gb),
             "expiryTime": expiry_time_ms,
             "enable": enable,
-            "tgId": tg_id,
+            "tgId": tg_id_value,
             "subId": sub_id,
             "flow": flow,
             "comment": comment,
@@ -485,21 +490,36 @@ class PanelClient:
         }
 
         payload = {
-            "id": inbound_id,
-            "settings": json.dumps(
-                {"clients": [client_payload]},
-                ensure_ascii=False,
-            ),
+            "client": client_payload,
+            "inboundIds": [inbound_id],
         }
 
         client = await self.login()
         try:
-            data = await self._request_json(
-                client,
-                "POST",
-                "/panel/api/inbounds/addClient",
-                json_data=payload,
+            csrf_token = await self._get_csrf_token_with_client(client)
+            headers = {"X-Requested-With": "XMLHttpRequest"}
+            if csrf_token:
+                headers["X-CSRF-Token"] = csrf_token
+
+            response = await client.post(
+                self._url("/panel/api/clients/add"),
+                json=payload,
+                headers=headers,
             )
+
+            if response.status_code >= 400:
+                raise PanelRequestError(
+                    f"Панель вернула HTTP {response.status_code} для {response.url}. "
+                    f"Body: {response.text[:500]}"
+                )
+
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise PanelRequestError(
+                    f"Панель вернула не JSON для {response.url}. "
+                    f"Body: {response.text[:500]}"
+                ) from exc
         finally:
             await client.aclose()
 
