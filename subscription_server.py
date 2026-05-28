@@ -12,6 +12,7 @@ from services.subscription_link_service import (
     SubscriptionLinkError,
     build_public_subscription_url,
     build_subscription_by_token,
+    build_v2rayn_json_by_token,
 )
 
 
@@ -41,22 +42,28 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         parts = [part for part in parsed.path.split("/") if part]
 
-        if len(parts) != 2 or parts[0] not in {"sub", "happ"}:
+        if len(parts) != 2 or parts[0] not in {"sub", "happ", "v2rayn", "json"}:
             self._send_text(404, "Not found\n")
             return
 
+        endpoint = parts[0]
         token = unquote(parts[1]).strip()
 
         if not token:
             self._send_text(400, "Bad request\n")
             return
 
-        if parts[0] == "happ":
+        if endpoint == "happ":
             subscription_url = build_public_subscription_url(token)
             self._redirect(f"happ://add/{subscription_url}")
             return
 
         try:
+            if endpoint in {"v2rayn", "json"}:
+                body = run_async(build_v2rayn_json_by_token(token))
+                self._send_json(200, body)
+                return
+
             body = run_async(build_subscription_by_token(token))
         except SubscriptionLinkError as exc:
             self._send_text(403, f"{exc}\n")
@@ -85,6 +92,15 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         data = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _send_json(self, status: int, body: str) -> None:
+        data = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()

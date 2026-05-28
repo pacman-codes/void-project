@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import ipaddress
+import json
 import os
 import re
 import secrets
 from datetime import datetime, timedelta
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
 from sqlalchemy import select
 
@@ -53,6 +55,11 @@ def build_public_subscription_url(token: str) -> str:
 def build_public_happ_import_url(token: str) -> str:
     base_url = os.getenv("SUBSCRIPTION_PUBLIC_BASE_URL", "http://127.0.0.1:8088").rstrip("/")
     return f"{base_url}/happ/{token}"
+
+
+def build_public_v2rayn_json_url(token: str) -> str:
+    base_url = os.getenv("SUBSCRIPTION_PUBLIC_BASE_URL", "http://127.0.0.1:8088")
+    return f"{base_url.rstrip('/')}/v2rayn/{token}"
 
 
 async def get_or_create_subscription_link(telegram_id: int) -> UserSubscriptionLink:
@@ -223,7 +230,7 @@ def _dedupe_rows_by_server(rows: list[VPNAccess], by_code: dict[str, object], by
     return selected
 
 
-async def build_subscription_by_token(token: str) -> str:
+async def _load_subscription_context(token: str) -> tuple[User, list[VPNAccess], dict[str, object], dict[str, object]]:
     async with async_session_maker() as session:
         link_result = await session.execute(
             select(UserSubscriptionLink).where(
@@ -261,15 +268,7 @@ async def build_subscription_by_token(token: str) -> str:
         by_code, by_endpoint = _load_registry_maps()
         selected_rows = _dedupe_rows_by_server(rows, by_code, by_endpoint)
 
-        config_urls = [
-            _with_fragment(
-                config_url=(row.config_url or "").strip(),
-                fragment=_server_display_name(row, by_code, by_endpoint),
-            )
-            for row in selected_rows
-        ]
-
-        if not config_urls:
+        if not selected_rows:
             raise SubscriptionLinkError("Активные ключи не найдены")
 
         now = _now()
@@ -281,17 +280,298 @@ async def build_subscription_by_token(token: str) -> str:
 
         await session.commit()
 
-        profile_name = _build_subscription_profile_name(user)
+        return user, selected_rows, by_code, by_endpoint
 
-        header_lines = [
-            f"#profile-title: {profile_name}",
-            "#subscription-auto-update-enable: 1",
-            "#subscription-auto-update-open-enable: 1",
-            "#subscription-autoconnect: 1",
-            "#subscription-autoconnect-type: lowestdelay",
-            "#subscription-ping-onopen-enabled: 1",
-            "#subscriptions-expand-now: 1",
-            "#ping-result: icon",
-        ]
 
-        return "\n".join(header_lines + config_urls) + "\n"
+async def build_subscription_by_token(token: str) -> str:
+    user, selected_rows, by_code, by_endpoint = await _load_subscription_context(token)
+
+    config_urls = [
+        _with_fragment(
+            config_url=(row.config_url or "").strip(),
+            fragment=_server_display_name(row, by_code, by_endpoint),
+        )
+        for row in selected_rows
+    ]
+
+    profile_name = _build_subscription_profile_name(user)
+
+    header_lines = [
+        f"#profile-title: {profile_name}",
+        "#subscription-auto-update-enable: 1",
+        "#subscription-auto-update-open-enable: 1",
+        "#subscription-autoconnect: 1",
+        "#subscription-autoconnect-type: lowestdelay",
+        "#subscription-ping-onopen-enabled: 1",
+        "#subscriptions-expand-now: 1",
+        "#ping-result: icon",
+    ]
+
+    return "\n".join(header_lines + config_urls) + "\n"
+
+
+def _parse_vless_url(config_url: str) -> tuple:
+    parts = urlsplit(config_url)
+    query = dict(parse_qsl(parts.query))
+
+    if parts.scheme != "vless" or not parts.username or not parts.hostname or not parts.port:
+        raise SubscriptionLinkError("Некорректная ссылка подключения")
+
+    return parts, query
+
+
+def _direct_rules_for_rows(rows: list[VPNAccess]) -> list[dict]:
+    ip_values: list[str] = []
+    domain_values: list[str] = []
+
+    for row in rows:
+        config_url = (row.config_url or "").strip()
+
+        try:
+            parts, _ = _parse_vless_url(config_url)
+        except SubscriptionLinkError:
+            continue
+
+        host = parts.hostname
+
+        if not host:
+            continue
+
+        try:
+            ip_obj = ipaddress.ip_address(host)
+        except ValueError:
+            domain_values.append(f"full:{host}")
+            continue
+
+        if ip_obj.version == 4:
+            ip_values.append(f"{host}/32")
+        else:
+            ip_values.append(f"{host}/128")
+
+    rules: list[dict] = []
+
+    if ip_values:
+        rules.append({
+            "type": "field",
+            "ip": sorted(set(ip_values)),
+            "outboundTag": "direct",
+        })
+
+    if domain_values:
+        rules.append({
+            "type": "field",
+            "domain": sorted(set(domain_values)),
+            "outboundTag": "direct",
+        })
+
+    return rules
+
+
+def _build_vless_outbound(config_url: str) -> dict:
+    parts, query = _parse_vless_url(config_url)
+
+    user = {
+        "id": parts.username,
+        "email": "t@t.tt",
+        "security": "auto",
+        "encryption": query.get("encryption", "none"),
+    }
+
+    if query.get("flow"):
+        user["flow"] = query["flow"]
+
+    network = query.get("type", "tcp")
+    if network == "tcp":
+        network = "raw"
+
+    security = query.get("security", "reality")
+
+    stream_settings: dict = {
+        "network": network,
+        "security": security,
+    }
+
+    if security == "reality":
+        stream_settings["realitySettings"] = {
+            "serverName": query.get("sni", ""),
+            "fingerprint": query.get("fp", "firefox"),
+            "show": False,
+            "publicKey": query.get("pbk", ""),
+            "shortId": query.get("sid", ""),
+            "spiderX": query.get("spx", "/"),
+            "mldsa65Verify": "",
+        }
+    elif security == "tls":
+        stream_settings["tlsSettings"] = {
+            "serverName": query.get("sni", parts.hostname or ""),
+            "allowInsecure": False,
+        }
+
+    return {
+        "tag": "proxy",
+        "protocol": "vless",
+        "settings": {
+            "vnext": [
+                {
+                    "address": parts.hostname,
+                    "port": parts.port,
+                    "users": [user],
+                }
+            ]
+        },
+        "streamSettings": stream_settings,
+        "mux": {
+            "enabled": False,
+            "concurrency": -1,
+        },
+    }
+
+
+def _build_v2rayn_json_config(rows: list[VPNAccess]) -> dict:
+    first_config_url = (rows[0].config_url or "").strip()
+    proxy_outbound = _build_vless_outbound(first_config_url)
+    direct_rules = _direct_rules_for_rows(rows)
+
+    return {
+        "log": {
+            "loglevel": "warning",
+        },
+        "dns": {
+            "hosts": {
+                "dns.google": [
+                    "8.8.8.8",
+                    "8.8.4.4",
+                    "2001:4860:4860::8888",
+                    "2001:4860:4860::8844",
+                ],
+                "one.one.one.one": [
+                    "1.1.1.1",
+                    "1.0.0.1",
+                    "2606:4700:4700::1111",
+                    "2606:4700:4700::1001",
+                ],
+            },
+            "servers": [
+                "8.8.8.8",
+                "1.1.1.1",
+            ],
+            "tag": "dns-module",
+        },
+        "inbounds": [
+            {
+                "tag": "socks",
+                "port": 10808,
+                "listen": "127.0.0.1",
+                "protocol": "mixed",
+                "sniffing": {
+                    "enabled": True,
+                    "destOverride": [
+                        "http",
+                        "tls",
+                    ],
+                    "routeOnly": False,
+                },
+                "settings": {
+                    "auth": "noauth",
+                    "udp": True,
+                    "allowTransparent": False,
+                },
+            },
+            {
+                "tag": "tun",
+                "protocol": "tun",
+                "sniffing": {
+                    "enabled": True,
+                    "destOverride": [
+                        "http",
+                        "tls",
+                    ],
+                    "routeOnly": False,
+                },
+                "settings": {
+                    "name": "xray_tun",
+                    "MTU": 1500,
+                    "gateway": [
+                        "172.18.0.1/30",
+                    ],
+                    "autoSystemRoutingTable": [
+                        "0.0.0.0/0",
+                        "::/0",
+                    ],
+                    "autoOutboundsInterface": "auto",
+                },
+            },
+        ],
+        "outbounds": [
+            proxy_outbound,
+            {
+                "tag": "direct",
+                "protocol": "freedom",
+            },
+            {
+                "tag": "block",
+                "protocol": "blackhole",
+            },
+            {
+                "tag": "dns",
+                "protocol": "dns",
+            },
+        ],
+        "routing": {
+            "domainStrategy": "AsIs",
+            "rules": [
+                {
+                    "type": "field",
+                    "inboundTag": [
+                        "api",
+                    ],
+                    "outboundTag": "api",
+                },
+                {
+                    "port": "135,137-139,5353",
+                    "network": "udp",
+                    "outboundTag": "block",
+                },
+                {
+                    "outboundTag": "block",
+                    "ip": [
+                        "224.0.0.0/3",
+                        "ff00::/8",
+                    ],
+                },
+                *direct_rules,
+                {
+                    "port": "53",
+                    "inboundTag": [
+                        "tun",
+                    ],
+                    "outboundTag": "dns",
+                },
+                {
+                    "type": "field",
+                    "outboundTag": "direct",
+                    "ip": [
+                        "geoip:private",
+                    ],
+                },
+                {
+                    "type": "field",
+                    "outboundTag": "direct",
+                    "domain": [
+                        "geosite:private",
+                    ],
+                },
+                {
+                    "type": "field",
+                    "port": "0-65535",
+                    "outboundTag": "proxy",
+                },
+            ],
+        },
+    }
+
+
+async def build_v2rayn_json_by_token(token: str) -> str:
+    _, selected_rows, _, _ = await _load_subscription_context(token)
+    config = _build_v2rayn_json_config(selected_rows)
+    return json.dumps(config, ensure_ascii=False, indent=2) + "\n"
