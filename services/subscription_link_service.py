@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from datetime import datetime, timedelta
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from sqlalchemy import select
 
 from db.database import async_session_maker
 from db.models import User, UserSubscriptionLink, VPNAccess
-from urllib.parse import quote, urlsplit, urlunsplit
-import re
+
+try:
+    from services.server_registry import load_enabled_server_nodes
+except Exception:
+    load_enabled_server_nodes = None
 
 
 RAW_KEY_GRACE_DAYS = 5
@@ -39,6 +44,10 @@ def _user_has_active_access(user: User) -> bool:
 
     return False
 
+
+def build_public_subscription_url(token: str) -> str:
+    base_url = os.getenv("SUBSCRIPTION_PUBLIC_BASE_URL", "http://127.0.0.1:8088")
+    return f"{base_url.rstrip('/')}/sub/{token}"
 
 
 def build_public_happ_import_url(token: str) -> str:
@@ -87,7 +96,7 @@ async def get_or_create_subscription_link(telegram_id: int) -> UserSubscriptionL
         raise SubscriptionLinkError("Не удалось создать уникальную ссылку подписки")
 
 
-def _build_subscription_profile_name(user) -> str:
+def _build_subscription_profile_name(user: User) -> str:
     username = getattr(user, "username", None)
     telegram_id = getattr(user, "telegram_id", None)
 
@@ -105,7 +114,7 @@ def _build_subscription_profile_name(user) -> str:
     return f"void-{safe}"
 
 
-def _with_subscription_profile_name(config_url: str, profile_name: str) -> str:
+def _with_fragment(config_url: str, fragment: str) -> str:
     if not config_url.startswith("vless://"):
         return config_url
 
@@ -115,8 +124,103 @@ def _with_subscription_profile_name(config_url: str, profile_name: str) -> str:
         parts.netloc,
         parts.path,
         parts.query,
-        quote(profile_name, safe="-_."),
+        quote(fragment, safe="-_."),
     ))
+
+
+def _endpoint_from_config_url(config_url: str | None) -> str:
+    if not config_url:
+        return ""
+
+    try:
+        parts = urlsplit(config_url)
+    except Exception:
+        return ""
+
+    if not parts.hostname or not parts.port:
+        return ""
+
+    return f"{parts.hostname}:{parts.port}"
+
+
+def _load_registry_maps() -> tuple[dict[str, object], dict[str, object]]:
+    if load_enabled_server_nodes is None:
+        return {}, {}
+
+    try:
+        nodes = load_enabled_server_nodes()
+    except Exception:
+        return {}, {}
+
+    by_code = {node.code: node for node in nodes}
+    by_endpoint = {node.endpoint: node for node in nodes}
+
+    return by_code, by_endpoint
+
+
+def _server_sort_key(row: VPNAccess, by_code: dict[str, object], by_endpoint: dict[str, object]) -> tuple:
+    server_name = row.server_name or ""
+    endpoint = _endpoint_from_config_url(row.config_url)
+
+    node = by_code.get(server_name) or by_endpoint.get(endpoint)
+
+    if node is not None:
+        return (-int(getattr(node, "priority", 0)), str(getattr(node, "code", "")), row.id)
+
+    return (0, server_name, row.id)
+
+
+def _server_display_name(row: VPNAccess, by_code: dict[str, object], by_endpoint: dict[str, object]) -> str:
+    server_name = row.server_name or ""
+    endpoint = _endpoint_from_config_url(row.config_url)
+
+    node = by_code.get(server_name) or by_endpoint.get(endpoint)
+
+    if node is not None:
+        display_name = str(getattr(node, "display_name", "")).strip()
+        if display_name:
+            return display_name
+
+    if server_name and server_name != "main":
+        return server_name.replace("_", "-")
+
+    if endpoint:
+        return endpoint
+
+    return f"node-{row.id}"
+
+
+def _dedupe_rows_by_server(rows: list[VPNAccess], by_code: dict[str, object], by_endpoint: dict[str, object]) -> list[VPNAccess]:
+    selected: list[VPNAccess] = []
+    seen: set[str] = set()
+
+    for row in sorted(rows, key=lambda item: _server_sort_key(item, by_code, by_endpoint)):
+        config_url = (row.config_url or "").strip()
+
+        if not config_url.startswith("vless://"):
+            continue
+
+        endpoint = _endpoint_from_config_url(config_url)
+        server_name = row.server_name or ""
+
+        node = by_code.get(server_name) or by_endpoint.get(endpoint)
+
+        if node is not None:
+            key = f"registry:{getattr(node, 'code', '')}"
+        elif server_name:
+            key = f"server:{server_name}"
+        elif endpoint:
+            key = f"endpoint:{endpoint}"
+        else:
+            key = f"access:{row.id}"
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        selected.append(row)
+
+    return selected
 
 
 async def build_subscription_by_token(token: str) -> str:
@@ -130,7 +234,7 @@ async def build_subscription_by_token(token: str) -> str:
         link = link_result.scalar_one_or_none()
 
         if link is None:
-            raise SubscriptionLinkError("Подключение не найдена или отключена")
+            raise SubscriptionLinkError("Подключение не найдено или отключено")
 
         user_result = await session.execute(
             select(User).where(User.id == link.user_id)
@@ -154,26 +258,15 @@ async def build_subscription_by_token(token: str) -> str:
         )
         rows = list(access_result.scalars().all())
 
-        migration_urls = [
-            row.config_url
-            for row in rows
-            if row.config_url and ":8449" in row.config_url
-        ]
+        by_code, by_endpoint = _load_registry_maps()
+        selected_rows = _dedupe_rows_by_server(rows, by_code, by_endpoint)
 
-        legacy_urls = [
-            row.config_url
-            for row in rows
-            if row.config_url and ":8449" not in row.config_url
-        ]
-
-        # Soft migration rule:
-        # if the user has a rescue 8449 access, subscription returns only that.
-        # old 443 access stays active in DB/panel until a later cleanup step.
-        config_urls = migration_urls or legacy_urls
-        profile_name = _build_subscription_profile_name(user)
         config_urls = [
-            _with_subscription_profile_name(config_url, profile_name)
-            for config_url in config_urls
+            _with_fragment(
+                config_url=(row.config_url or "").strip(),
+                fragment=_server_display_name(row, by_code, by_endpoint),
+            )
+            for row in selected_rows
         ]
 
         if not config_urls:
@@ -188,8 +281,10 @@ async def build_subscription_by_token(token: str) -> str:
 
         await session.commit()
 
+        profile_name = _build_subscription_profile_name(user)
+
         header_lines = [
-            "#profile-title: VOID",
+            f"#profile-title: {profile_name}",
             "#subscription-auto-update-enable: 1",
             "#subscription-auto-update-open-enable: 1",
             "#subscription-autoconnect: 1",
@@ -200,8 +295,3 @@ async def build_subscription_by_token(token: str) -> str:
         ]
 
         return "\n".join(header_lines + config_urls) + "\n"
-
-
-def build_public_subscription_url(token: str) -> str:
-    base_url = os.getenv("SUBSCRIPTION_PUBLIC_BASE_URL", "http://127.0.0.1:8088")
-    return f"{base_url.rstrip('/')}/sub/{token}"
