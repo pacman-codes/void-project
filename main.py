@@ -10,6 +10,7 @@ from db.database import init_db
 from bot.handlers import register_handlers
 from services.expiry_scheduler import maybe_start_paid_expiry_scheduler
 from services.traffic_scheduler import maybe_start_traffic_sync_scheduler
+from services.retention_scheduler import maybe_start_retention_scheduler
 
 
 async def main() -> None:
@@ -27,6 +28,7 @@ async def main() -> None:
 
     expiry_scheduler_task = maybe_start_paid_expiry_scheduler()
     traffic_scheduler_task = maybe_start_traffic_sync_scheduler()
+    retention_scheduler_task = maybe_start_retention_scheduler(bot)
 
     print("Бот запущен 🚀")
 
@@ -35,7 +37,7 @@ async def main() -> None:
     finally:
         tasks = [
             task
-            for task in (expiry_scheduler_task, traffic_scheduler_task)
+            for task in (expiry_scheduler_task, traffic_scheduler_task, retention_scheduler_task)
             if task is not None
         ]
 
