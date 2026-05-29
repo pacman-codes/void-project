@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 from datetime import datetime
 from typing import Any
@@ -17,6 +18,8 @@ from db.database import async_session_maker
 from db.models import User, UserEvent, VPNAccess
 from services.audit_log_service import log_user_event
 from services.vpn_service import VPNService
+from services.panel_client import PanelClient
+from services.server_registry import get_server_node, load_panel_credentials
 
 DEFAULT_FREE_TRAFFIC_LIMIT_MB = 3072
 DEFAULT_PAID_OVERUSE_NOTIFY_MB = 153600  # 150 GB
@@ -361,6 +364,134 @@ def _bytes_to_mb(value: int) -> int:
     return max(0, int(value) // (1024 * 1024))
 
 
+def _parse_json_dict(value: object | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+
+    if isinstance(value, dict):
+        return value
+
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return {}
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    return {}
+
+
+def _make_registry_panel_client(server) -> PanelClient:
+    creds = load_panel_credentials(server)
+
+    panel = object.__new__(PanelClient)
+    panel.origin = server.panel_origin
+    panel.base_path = server.panel_path
+    panel.username = creds.username
+    panel.password = creds.password
+    panel.verify_ssl = False
+    panel.timeout = _env_int("PANEL_TIMEOUT", default=20, minimum=3, maximum=120)
+
+    return panel
+
+
+def _stat_matches_access(stat: dict[str, Any], access: VPNAccess) -> bool:
+    external_id = str(access.external_id or "")
+    client_uuid = str(access.client_uuid or "")
+
+    return bool(
+        (external_id and str(stat.get("email", "")) == external_id)
+        or (client_uuid and str(stat.get("uuid", "")) == client_uuid)
+        or (client_uuid and str(stat.get("id", "")) == client_uuid)
+    )
+
+
+async def _get_client_traffic_from_inbound_raw(
+    *,
+    panel: PanelClient,
+    inbound_id: int,
+    access: VPNAccess,
+) -> dict[str, Any]:
+    raw = await panel.get_inbound_raw(inbound_id)
+
+    stats = (
+        raw.get("clientStats")
+        or raw.get("client_stats")
+        or raw.get("clientTraffics")
+        or []
+    )
+
+    if isinstance(stats, list):
+        for item in stats:
+            if isinstance(item, dict) and _stat_matches_access(item, access):
+                return item
+
+    settings = _parse_json_dict(raw.get("settings"))
+    clients = settings.get("clients") or []
+
+    if isinstance(clients, list):
+        for client in clients:
+            if not isinstance(client, dict):
+                continue
+
+            if _stat_matches_access(client, access):
+                # Some 3x-ui versions return clients in inbound settings but no traffic
+                # row until traffic is recorded. Treat that as zero traffic, not sync failure.
+                return {
+                    "email": client.get("email") or access.external_id,
+                    "uuid": client.get("id") or access.client_uuid,
+                    "enable": bool(client.get("enable", True)),
+                    "up": 0,
+                    "down": 0,
+                    "allTime": 0,
+                }
+
+    raise RuntimeError(
+        f"client traffic not found in inbound raw: "
+        f"inbound_id={inbound_id}, external_id={access.external_id}, uuid={access.client_uuid}"
+    )
+
+
+async def _get_client_traffic_for_access(
+    *,
+    panel: PanelClient,
+    inbound_id: int,
+    access: VPNAccess,
+) -> dict[str, Any]:
+    last_error: Exception | None = None
+
+    if access.external_id:
+        try:
+            return await panel.get_client_traffic_by_email(access.external_id)
+        except Exception as exc:
+            last_error = exc
+
+    if access.client_uuid:
+        try:
+            stats = await panel.get_client_traffic_by_uuid(access.client_uuid)
+            for item in stats:
+                if isinstance(item, dict) and _stat_matches_access(item, access):
+                    return item
+            if stats and isinstance(stats[0], dict):
+                return stats[0]
+        except Exception as exc:
+            last_error = exc
+
+    try:
+        return await _get_client_traffic_from_inbound_raw(
+            panel=panel,
+            inbound_id=inbound_id,
+            access=access,
+        )
+    except Exception as exc:
+        if last_error is not None:
+            raise last_error
+        raise exc
+
+
 async def collect_user_panel_traffic(telegram_id: int) -> dict[str, Any] | None:
     async with async_session_maker() as session:
         user_result = await session.execute(
@@ -383,21 +514,44 @@ async def collect_user_panel_traffic(telegram_id: int) -> dict[str, Any] | None:
         db_snapshot = build_traffic_snapshot(user)
 
     service = VPNService()
-    panel = service._get_panel_client()
+    legacy_panel: PanelClient | None = None
+    legacy_inbound_id = int(getattr(service, "inbound_id", 0) or 0)
 
     records: list[dict[str, Any]] = []
     errors: list[str] = []
     total_bytes = 0
 
     for access in accesses:
-        label = f"access_id={access.id}, device={access.device_number}, external_id={_mask(access.external_id)}"
+        label = (
+            f"access_id={access.id}, device={access.device_number}, "
+            f"server={access.server_name or '-'}, external_id={_mask(access.external_id)}"
+        )
 
         if not access.external_id:
             errors.append(label + " — no external_id")
             continue
 
+        panel_label = "legacy"
+        inbound_id = legacy_inbound_id
+
         try:
-            stat = await panel.get_client_traffic_by_email(access.external_id)
+            server_name = (access.server_name or "").strip()
+
+            if server_name and server_name not in {"main", "dev"}:
+                server = get_server_node(server_name)
+                panel = _make_registry_panel_client(server)
+                inbound_id = int(server.inbound_id)
+                panel_label = server.code
+            else:
+                if legacy_panel is None:
+                    legacy_panel = service._get_panel_client()
+                panel = legacy_panel
+
+            stat = await _get_client_traffic_for_access(
+                panel=panel,
+                inbound_id=inbound_id,
+                access=access,
+            )
         except Exception as exc:
             errors.append(label + f" — {type(exc).__name__}: {exc}")
             continue
@@ -413,10 +567,13 @@ async def collect_user_panel_traffic(telegram_id: int) -> dict[str, Any] | None:
             {
                 "access_id": access.id,
                 "device_number": access.device_number,
+                "server_name": access.server_name,
+                "panel": panel_label,
+                "inbound_id": inbound_id,
                 "external_id": _mask(access.external_id),
                 "client_uuid": _mask(access.client_uuid),
                 "panel_email": _mask(stat.get("email")),
-                "panel_uuid": _mask(stat.get("uuid")),
+                "panel_uuid": _mask(stat.get("uuid") or stat.get("id")),
                 "enable": bool(stat.get("enable")),
                 "up_bytes": up_bytes,
                 "down_bytes": down_bytes,

@@ -10,6 +10,7 @@ from urllib.parse import quote
 import httpx
 
 from config.config import config
+from services.server_registry import get_server_node, load_panel_credentials
 
 
 class PanelClientError(Exception):
@@ -57,25 +58,46 @@ class InboundInfo:
 
 
 class PanelClient:
-    def __init__(self) -> None:
-        self.origin = config.panel_origin
-        self.base_path = config.panel_path
-        self.username = config.panel_username
-        self.password = config.panel_password
+    def __init__(self, server_code: str | None = None) -> None:
         self.verify_ssl = config.panel_verify_ssl
         self.timeout = config.panel_timeout
 
+        code = (server_code or __import__("os").getenv("DEFAULT_PANEL_SERVER_CODE") or "").strip()
+
+        if code:
+            server = get_server_node(code)
+            creds = load_panel_credentials(server)
+
+            self.origin = server.panel_origin
+            self.base_path = server.panel_path
+            self.username = creds.username
+            self.password = creds.password
+            self.inbound_id = int(server.inbound_id)
+            self.server_code = server.code
+        else:
+            # Compatibility fallback for old deployments.
+            self.origin = config.panel_origin
+            self.base_path = config.panel_path
+            self.username = config.panel_username
+            self.password = config.panel_password
+            self.inbound_id = int(__import__("os").getenv("PANEL_INBOUND_ID", "0") or 0)
+            self.server_code = "legacy"
+
         if not self.origin:
-            raise PanelClientError("Не задан PANEL_ORIGIN в .env")
+            raise PanelClientError("Не задан panel origin")
 
         if not self.base_path:
-            raise PanelClientError("Не задан PANEL_PATH в .env")
+            raise PanelClientError("Не задан panel path")
 
         if not self.username:
-            raise PanelClientError("Не задан PANEL_USERNAME в .env")
+            raise PanelClientError("Не задан panel username")
 
         if not self.password:
-            raise PanelClientError("Не задан PANEL_PASSWORD в .env")
+            raise PanelClientError("Не задан panel password")
+
+    @classmethod
+    def from_server_code(cls, server_code: str) -> "PanelClient":
+        return cls(server_code=server_code)
 
     @property
     def base_url(self) -> str:

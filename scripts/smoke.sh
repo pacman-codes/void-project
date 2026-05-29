@@ -268,13 +268,27 @@ PY
 
 echo "== 10c. Panel API checks =="
 python3 - << 'PY'
+import os
 import asyncio
+from pathlib import Path
 
 from services.panel_client import PanelClient
 
-INBOUND_ID = 8
+env_path = Path(".env")
+if env_path.exists():
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key, value)
+
+INBOUND_ID = int(os.getenv("PANEL_INBOUND_ID", "0"))
 
 async def main():
+    if INBOUND_ID <= 0:
+        raise SystemExit("PANEL_INBOUND_ID is missing or invalid")
+
     panel = PanelClient()
 
     two_factor = await panel.get_two_factor_enabled()
