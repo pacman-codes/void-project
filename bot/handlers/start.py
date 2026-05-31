@@ -226,25 +226,9 @@ async def get_primary_config_url(telegram_id: int) -> str | None:
 
 
 async def ensure_primary_config_url(telegram_id: int, access_type: str | None) -> str | None:
-    if access_type not in {"free", "paid"}:
-        return None
-
-    existing = await get_primary_config_url(telegram_id)
-    if existing:
-        return existing
-
-    try:
-        service = VPNService()
-        result = await service.ensure_vpn_access_record(
-            telegram_id=telegram_id,
-            device_number=1,
-            device_name="Устройство 1",
-        )
-        return result.get("config_url")
-    except VPNServiceError:
-        return None
-    except Exception:
-        return None
+    # Legacy raw-key provisioning is disabled.
+    # Users should receive a subscription link via subscription_parts/menu.py.
+    return None
 
 
 def build_free_limit_reached_text(lang: str = "ru") -> str:

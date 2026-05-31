@@ -6,7 +6,7 @@ import os
 import re
 import secrets
 from datetime import datetime, timedelta
-from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import select
 
@@ -121,6 +121,130 @@ def _build_subscription_profile_name(user: User) -> str:
     return f"void-{safe}"
 
 
+
+
+def _node_value(node: object, names: tuple[str, ...]) -> object | None:
+    for name in names:
+        if isinstance(node, dict) and name in node:
+            value = node.get(name)
+        else:
+            value = getattr(node, name, None)
+
+        if value not in (None, ""):
+            return value
+
+    return None
+
+
+def _registry_public_host_port(
+    row: VPNAccess,
+    by_code: dict[str, object],
+) -> tuple[str | None, int | None]:
+    server_name = (row.server_name or "").strip()
+    node = by_code.get(server_name)
+
+    if node is None:
+        return None, None
+
+    host = _node_value(
+        node,
+        (
+            "public_host",
+            "subscription_host",
+            "host",
+            "domain",
+            "address",
+            "server_host",
+        ),
+    )
+
+    port_value = _node_value(
+        node,
+        (
+            "public_port",
+            "vless_port",
+            "port",
+        ),
+    )
+
+    port = None
+    if port_value not in (None, ""):
+        try:
+            port = int(port_value)
+        except Exception:
+            port = None
+
+    if host is None:
+        return None, port
+
+    return str(host), port
+
+
+def _normalize_config_endpoint_by_registry(
+    config_url: str,
+    row: VPNAccess,
+    by_code: dict[str, object],
+) -> str:
+    config_url = (config_url or "").strip()
+
+    if not config_url:
+        return config_url
+
+    # Only VLESS links should be host-normalized by registry.
+    # HY2 links carry their own port/SNI and must stay as generated.
+    if not config_url.startswith("vless://"):
+        return config_url
+
+    host, port = _registry_public_host_port(row, by_code)
+
+    if not host:
+        return config_url
+
+    try:
+        parts = urlsplit(config_url)
+    except Exception:
+        return config_url
+
+    if not parts.scheme or not parts.netloc:
+        return config_url
+
+    username = parts.username or ""
+    password = parts.password
+
+    auth = username
+    if password:
+        auth = f"{username}:{password}"
+
+    if port is None:
+        port = parts.port
+
+    netloc = f"{auth}@{host}" if auth else host
+    if port:
+        netloc = f"{netloc}:{port}"
+
+    query_items = dict(parse_qsl(parts.query, keep_blank_values=True))
+
+    node = by_code.get((row.server_name or "").strip())
+
+    # Do not override pbk/sni/sid/spx/fp from the panel-generated config_url.
+    # Those values must match the real inbound. Registry is used here only for
+    # public host/port normalization and for adding flow if it is missing.
+    if node is not None and not query_items.get("flow"):
+        flow = _node_value(node, ("flow",))
+        if flow:
+            query_items["flow"] = str(flow)
+
+    return urlunsplit(
+        (
+            parts.scheme,
+            netloc,
+            parts.path,
+            urlencode(query_items, doseq=False, safe="/"),
+            parts.fragment,
+        )
+    )
+
+
 def _with_fragment(config_url: str, fragment: str) -> str:
     if not config_url.startswith("vless://"):
         return config_url
@@ -166,15 +290,33 @@ def _load_registry_maps() -> tuple[dict[str, object], dict[str, object]]:
 
 
 def _server_sort_key(row: VPNAccess, by_code: dict[str, object], by_endpoint: dict[str, object]) -> tuple:
+    config_url = (row.config_url or "").strip()
+    scheme = ""
+
+    try:
+        scheme = urlsplit(config_url).scheme.lower()
+    except Exception:
+        scheme = ""
+
+    # Subscription order:
+    # 1. VLESS nodes first
+    # 2. reserve/experimental non-VLESS nodes after
+    protocol_order = 0 if scheme == "vless" else 1
+
     server_name = row.server_name or ""
     endpoint = _endpoint_from_config_url(row.config_url)
 
     node = by_code.get(server_name) or by_endpoint.get(endpoint)
 
     if node is not None:
-        return (-int(getattr(node, "priority", 0)), str(getattr(node, "code", "")), row.id)
+        return (
+            protocol_order,
+            -int(getattr(node, "priority", 0)),
+            str(getattr(node, "code", "")),
+            row.id,
+        )
 
-    return (0, server_name, row.id)
+    return (protocol_order, 0, server_name, row.id)
 
 
 def _server_display_name(row: VPNAccess, by_code: dict[str, object], by_endpoint: dict[str, object]) -> str:
@@ -200,26 +342,33 @@ def _server_display_name(row: VPNAccess, by_code: dict[str, object], by_endpoint
 def _dedupe_rows_by_server(rows: list[VPNAccess], by_code: dict[str, object], by_endpoint: dict[str, object]) -> list[VPNAccess]:
     selected: list[VPNAccess] = []
     seen: set[str] = set()
+    allowed_prefixes = ("vless://", "hysteria2://", "hy2://")
 
     for row in sorted(rows, key=lambda item: _server_sort_key(item, by_code, by_endpoint)):
         config_url = (row.config_url or "").strip()
 
-        if not config_url.startswith("vless://"):
+        if not config_url.startswith(allowed_prefixes):
             continue
 
+        scheme = urlsplit(config_url).scheme.lower()
         endpoint = _endpoint_from_config_url(config_url)
         server_name = row.server_name or ""
 
         node = by_code.get(server_name) or by_endpoint.get(endpoint)
 
-        if node is not None:
-            key = f"registry:{getattr(node, 'code', '')}"
-        elif server_name:
-            key = f"server:{server_name}"
-        elif endpoint:
-            key = f"endpoint:{endpoint}"
+        if scheme == "vless":
+            if node is not None:
+                key = f"registry:{getattr(node, 'code', '')}"
+            elif server_name:
+                key = f"server:{server_name}"
+            elif endpoint:
+                key = f"endpoint:{endpoint}"
+            else:
+                key = f"access:{row.id}"
         else:
-            key = f"access:{row.id}"
+            # Experimental/non-VLESS rows must not collide with the normal VLESS node
+            # that uses the same server_name/endpoint.
+            key = f"{scheme}:access:{row.id}"
 
         if key in seen:
             continue
@@ -266,6 +415,20 @@ async def _load_subscription_context(token: str) -> tuple[User, list[VPNAccess],
         rows = list(access_result.scalars().all())
 
         by_code, by_endpoint = _load_registry_maps()
+
+        # If registry-managed rows exist, do not expose legacy raw/main rows.
+        # Legacy rows are kept only as a fallback for old users who do not have
+        # any registry-managed access rows yet.
+        registry_rows = [
+            row
+            for row in rows
+            if (row.server_name or "").strip()
+            and (row.server_name or "").strip() not in {"main", "dev", "migration-8449"}
+        ]
+
+        if registry_rows:
+            rows = registry_rows
+
         selected_rows = _dedupe_rows_by_server(rows, by_code, by_endpoint)
 
         if not selected_rows:
@@ -288,7 +451,11 @@ async def build_subscription_by_token(token: str) -> str:
 
     config_urls = [
         _with_fragment(
-            config_url=(row.config_url or "").strip(),
+            config_url=_normalize_config_endpoint_by_registry(
+                config_url=(row.config_url or "").strip(),
+                row=row,
+                by_code=by_code,
+            ),
             fragment=_server_display_name(row, by_code, by_endpoint),
         )
         for row in selected_rows

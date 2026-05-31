@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
+PYTHON_BIN="${PYTHON_BIN:-./venv/bin/python}"
 
 cd /home/vpn/telegram_bot
 
 echo "== Python compile =="
-python3 -m py_compile main.py webhook_server.py
-python3 -m compileall -q bot services config db
+"$PYTHON_BIN" -m py_compile main.py webhook_server.py
+"$PYTHON_BIN" -m compileall -q bot services config db
 
 echo "== Import check =="
-python3 - << 'PY'
+"$PYTHON_BIN" - << 'PY'
 import main
 import webhook_server
 from services.yookassa_webhook_service import process_yookassa_notification

@@ -51,39 +51,8 @@ async def activate_paid_for_user(
 
         await session.commit()
 
-    try:
-        service = VPNService()
-        await service.ensure_vpn_access_record(
-            telegram_id=user_id,
-            device_number=1,
-            device_name="Устройство 1",
-        )
-    except VPNServiceError as e:
-        await log_user_event(
-            event_type="subscription_paid_activation_failed",
-            target_telegram_id=user_id,
-            source="subscription_service",
-            status="error",
-            message=str(e),
-            details={
-                "duration_days": duration_days,
-                "promo_code": promo_code,
-            },
-        )
-        return False, str(e)
-    except Exception as e:
-        await log_user_event(
-            event_type="subscription_paid_activation_failed",
-            target_telegram_id=user_id,
-            source="subscription_service",
-            status="error",
-            message=str(e),
-            details={
-                "duration_days": duration_days,
-                "promo_code": promo_code,
-            },
-        )
-        return False, f"Не удалось создать paid-ключи: {e}"
+    # Legacy raw-key provisioning is disabled.
+    # Subscription access is prepared when the user opens the subscription link screen.
 
     await log_user_event(
         event_type="subscription_paid_activated",

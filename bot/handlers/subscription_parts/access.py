@@ -86,16 +86,6 @@ async def activate_free_for_user(user_id: int) -> tuple[bool, str]:
 
         await session.commit()
 
-    try:
-        service = VPNService()
-        await service.ensure_vpn_access_record(
-            telegram_id=user_id,
-            device_number=1,
-            device_name="Устройство 1",
-        )
-    except VPNServiceError:
-        return False, "Не удалось создать ключ. Попробуйте ещё раз позже."
-    except Exception:
-        return False, "Не удалось создать ключ. Попробуйте ещё раз позже."
-
+    # Legacy raw-key provisioning is disabled.
+    # Subscription access is prepared when the user opens the subscription link screen.
     return True, "ok"

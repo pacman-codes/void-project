@@ -173,6 +173,8 @@ async def has_existing_active_config(telegram_id: int) -> bool:
                 VPNAccess.is_active.is_(True),
                 VPNAccess.config_url.isnot(None),
                 VPNAccess.config_url.like("vless://%"),
+                VPNAccess.server_name != "main",
+                VPNAccess.device_number >= 100,
             )
             .limit(1)
         )
@@ -198,11 +200,14 @@ async def ensure_access_before_subscription_link(telegram_id: int) -> tuple[bool
                     _VPNAccess.is_active.is_(True),
                     _VPNAccess.config_url.isnot(None),
                     _VPNAccess.config_url.like("vless://%"),
+                    _VPNAccess.server_name != "main",
+                    _VPNAccess.device_number >= 100,
                 )
                 .limit(1)
             )
-            if _existing_result.scalar_one_or_none() is not None:
-                return True, "OK"
+            # Do not return early here.
+            # Existing users still need provisioning for newly added registry servers.
+            _existing_result.scalar_one_or_none()
     except Exception as exc:
         print(f"DIRECT EXISTING CONFIG GUARD failed: {exc}")
 
@@ -212,19 +217,23 @@ async def ensure_access_before_subscription_link(telegram_id: int) -> tuple[bool
     if not access.get("has_access"):
         return False, "Доступ не активен"
 
-    if await has_existing_active_config(telegram_id):
-        return True, "OK"
+    # Do not return early if an active config already exists.
+    # We still try to provision missing enabled registry servers.
 
     try:
         service = VPNService()
 
         if access_type in {"free", "paid"}:
-            await service.ensure_migration_8449_access_record(
-                telegram_id=telegram_id,
-                device_number=1,
-                device_name="Новое подключение",
-            )
-            return True, "OK"
+            result = await service.ensure_subscription_access_records(telegram_id)
+
+            if int(result.get("provisioned_count") or 0) > 0:
+                return True, "OK"
+
+            if await has_existing_active_config(telegram_id):
+                return True, "OK"
+
+            errors = result.get("errors") or []
+            return False, "Не удалось подготовить подписочную ссылку: " + "; ".join(errors)
 
         return False, "Доступ не активен"
 
