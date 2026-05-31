@@ -14,9 +14,9 @@ from db.database import async_session_maker
 from db.models import User, UserSubscriptionLink, VPNAccess
 
 try:
-    from services.server_registry import load_enabled_server_nodes
+    from services.server_registry import load_server_nodes
 except Exception:
-    load_enabled_server_nodes = None
+    load_server_nodes = None
 
 
 RAW_KEY_GRACE_DAYS = 5
@@ -246,7 +246,7 @@ def _normalize_config_endpoint_by_registry(
 
 
 def _with_fragment(config_url: str, fragment: str) -> str:
-    if not config_url.startswith("vless://"):
+    if not config_url.startswith(("vless://", "hysteria2://", "hy2://")):
         return config_url
 
     parts = urlsplit(config_url)
@@ -275,11 +275,14 @@ def _endpoint_from_config_url(config_url: str | None) -> str:
 
 
 def _load_registry_maps() -> tuple[dict[str, object], dict[str, object]]:
-    if load_enabled_server_nodes is None:
+    if load_server_nodes is None:
         return {}, {}
 
     try:
-        nodes = load_enabled_server_nodes()
+        # Load all registry nodes for subscription display/normalization.
+        # Disabled nodes are not provisioned automatically elsewhere, but active
+        # manual/test rows should still use their registry display_name.
+        nodes = load_server_nodes()
     except Exception:
         return {}, {}
 
@@ -322,6 +325,18 @@ def _server_sort_key(row: VPNAccess, by_code: dict[str, object], by_endpoint: di
 def _server_display_name(row: VPNAccess, by_code: dict[str, object], by_endpoint: dict[str, object]) -> str:
     server_name = row.server_name or ""
     endpoint = _endpoint_from_config_url(row.config_url)
+
+    config_url = (row.config_url or "").strip()
+    try:
+        scheme = urlsplit(config_url).scheme.lower()
+    except Exception:
+        scheme = ""
+
+    if scheme in {"hysteria2", "hy2"}:
+        if endpoint == "gepg.voidmod.space:8443":
+            return "🧬 Резерв"
+        if endpoint == "nlpg-vl.voidmod.space:443":
+            return "🧪 Резерв"
 
     node = by_code.get(server_name) or by_endpoint.get(endpoint)
 
