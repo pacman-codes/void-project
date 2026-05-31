@@ -4,6 +4,7 @@ set -Eeuo pipefail
 PROD_IP_DEFAULT="193.233.209.130"
 PANEL_PORT_DEFAULT="8448"
 SSH_PORT_DEFAULT="22"
+XUI_VERSION_DEFAULT="v3.1.0"
 RESULTS_DIR="${HOME}/void-node-bootstrap-results"
 
 TMP_REMOTE_SCRIPT=""
@@ -175,6 +176,7 @@ OWNER_IP="${OWNER_IP:-}"
 PANEL_USERNAME_GENERATED="${PANEL_USERNAME_GENERATED:?}"
 PANEL_PASSWORD_GENERATED="${PANEL_PASSWORD_GENERATED:?}"
 PANEL_WEB_BASE_PATH_GENERATED="${PANEL_WEB_BASE_PATH_GENERATED:?}"
+XUI_VERSION="${XUI_VERSION:-v3.1.0}"
 
 STATE_DIR="/root/void-node-bootstrap-state"
 INSTALL_LOG="${STATE_DIR}/3xui-install.log"
@@ -372,6 +374,87 @@ EOF_EXPECT
 
   echo "3x-ui installer is running. Output is stored in ${INSTALL_LOG}"
   expect /root/void-install-3xui.expect
+}
+
+
+pin_3xui_version() {
+  log "Pin 3x-ui version ${XUI_VERSION}"
+
+  [[ -x /usr/local/x-ui/x-ui ]] || die "x-ui binary not found before pin"
+
+  local current_version
+  current_version="$(
+    /usr/local/x-ui/x-ui version 2>/dev/null \
+      | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+' \
+      | head -1 || true
+  )"
+
+  echo "Current x-ui version: ${current_version:-unknown}"
+  echo "Target x-ui version: ${XUI_VERSION}"
+
+  if [[ "${current_version}" == "${XUI_VERSION#v}" || "${current_version}" == "${XUI_VERSION}" ]]; then
+    echo "x-ui already pinned to ${XUI_VERSION}"
+    return 0
+  fi
+
+  local arch="amd64"
+  local workdir="/root/void-xui-pin-${XUI_VERSION}"
+  local asset="x-ui-linux-${arch}.tar.gz"
+
+  rm -rf "${workdir}"
+  mkdir -p "${workdir}"
+  cd "${workdir}"
+
+  curl -fL -o "${asset}" \
+    "https://github.com/MHSanaei/3x-ui/releases/download/${XUI_VERSION}/${asset}" \
+    || die "Failed to download 3x-ui ${XUI_VERSION}"
+
+  tar -xzf "${asset}" || die "Failed to unpack 3x-ui ${XUI_VERSION}"
+
+  mkdir -p "${STATE_DIR}"
+  tar -czf "${STATE_DIR}/x-ui-before-pin-$(date +%Y%m%d_%H%M%S).tar.gz" \
+    /usr/local/x-ui /etc/systemd/system/x-ui.service 2>/dev/null || true
+
+  systemctl stop x-ui || true
+
+  rm -rf /usr/local/x-ui
+  mkdir -p /usr/local/x-ui
+
+  if [[ -d "./x-ui" ]]; then
+    cp -a ./x-ui/* /usr/local/x-ui/
+  else
+    cp -a ./* /usr/local/x-ui/
+  fi
+
+  chmod +x /usr/local/x-ui/x-ui || true
+  chmod +x /usr/local/x-ui/bin/xray-linux-amd64 || true
+
+  if [[ ! -f /etc/systemd/system/x-ui.service ]]; then
+    cat > /etc/systemd/system/x-ui.service <<'EOF_SERVICE'
+[Unit]
+Description=x-ui Service
+After=network.target nss-lookup.target
+
+[Service]
+User=root
+WorkingDirectory=/usr/local/x-ui
+ExecStart=/usr/local/x-ui/x-ui
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF_SERVICE
+  fi
+
+  systemctl daemon-reload
+  systemctl enable x-ui
+  systemctl restart x-ui
+  sleep 3
+  systemctl is-active x-ui || die "x-ui is not active after version pin"
+
+  echo "Pinned x-ui version:"
+  /usr/local/x-ui/x-ui version || true
 }
 
 force_panel_settings() {
@@ -706,6 +789,7 @@ main() {
   cleanup_amnezia_docker
   cleanup_partial_xui
   install_3xui_skip_ssl
+  pin_3xui_version
   force_panel_settings
   configure_firewall
   issue_domain_cert_non_blocking
@@ -742,6 +826,7 @@ run_remote_bootstrap() {
     PANEL_USERNAME_GENERATED='${PANEL_USERNAME_GENERATED}' \
     PANEL_PASSWORD_GENERATED='${PANEL_PASSWORD_GENERATED}' \
     PANEL_WEB_BASE_PATH_GENERATED='${PANEL_WEB_BASE_PATH_GENERATED}' \
+    XUI_VERSION='${XUI_VERSION:-v3.1.0}' \
     bash /root/void_remote_node_bootstrap.sh
   "
 }
@@ -824,7 +909,8 @@ append_secrets_to_prod() {
 
   sudo mkdir -p /etc/void
   sudo touch /etc/void/server_secrets.env
-  sudo chmod 600 /etc/void/server_secrets.env
+  sudo chown root:vpn /etc/void/server_secrets.env
+  sudo chmod 640 /etc/void/server_secrets.env
   sudo cp /etc/void/server_secrets.env "/etc/void/server_secrets.env.bak_$(date +%Y%m%d_%H%M%S)"
 
   sudo sed -i "/^${SECRET_PREFIX}_PANEL_USERNAME=/d" /etc/void/server_secrets.env
@@ -836,6 +922,9 @@ append_secrets_to_prod() {
     echo "${SECRET_PREFIX}_PANEL_PASSWORD=${password}"
     echo "${SECRET_PREFIX}_PANEL_API_TOKEN=${api_token}"
   } | sudo tee -a /etc/void/server_secrets.env >/dev/null
+
+  sudo chown root:vpn /etc/void/server_secrets.env
+  sudo chmod 640 /etc/void/server_secrets.env
 
   sudo grep "^${SECRET_PREFIX}_PANEL_" /etc/void/server_secrets.env \
     | sed -E 's/(PASSWORD=).+/\1***hidden***/; s/(API_TOKEN=).+/\1***hidden***/'
@@ -857,6 +946,7 @@ final_notes() {
 
 main() {
   PROD_IP="${PROD_IP:-${PROD_IP_DEFAULT}}"
+  XUI_VERSION="${XUI_VERSION:-${XUI_VERSION_DEFAULT}}"
 
   install_local_deps
   confirm_running_on_prod
