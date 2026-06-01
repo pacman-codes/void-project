@@ -39,6 +39,7 @@ HOSTNAME=""
 DISPLAY_NAME=""
 SECRET_PREFIX=""
 OWNER_IP=""
+RESET_KNOWN_HOST="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,6 +78,10 @@ while [[ $# -gt 0 ]]; do
     --owner-ip)
       OWNER_IP="${2:?missing --owner-ip value}"
       shift 2
+      ;;
+    --reset-known-host)
+      RESET_KNOWN_HOST="true"
+      shift
       ;;
     *)
       die "Unknown arg: $1"
@@ -151,6 +156,14 @@ CFG
 echo
 read -rp "Run bootstrap? Type YES: " CONFIRM
 [[ "$CONFIRM" == "YES" ]] || die "Cancelled"
+
+if [[ "$RESET_KNOWN_HOST" == "true" ]]; then
+  log "Reset known_hosts entries"
+  mkdir -p "${HOME}/.ssh"
+  touch "${HOME}/.ssh/known_hosts"
+  ssh-keygen -f "${HOME}/.ssh/known_hosts" -R "$TARGET_IP" || true
+  ssh-keygen -f "${HOME}/.ssh/known_hosts" -R "$DOMAIN" || true
+fi
 
 log "Remote bootstrap"
 ssh_target bash -s <<REMOTE
