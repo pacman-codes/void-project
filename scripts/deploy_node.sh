@@ -18,15 +18,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PROFILE" in
-  base)
-    exec "$(dirname "$0")/bootstrap_node_from_prod_v2.sh" "${ARGS[@]}"
-    ;;
-  reality|xhttp-cdn|hy2)
-    echo "ERROR: profile '$PROFILE' is not implemented yet. Run --profile base first." >&2
-    exit 1
+  base|reality|xhttp-cdn|hy2)
     ;;
   *)
     echo "ERROR: unknown profile '$PROFILE'. Supported: base, reality, xhttp-cdn, hy2" >&2
     exit 1
     ;;
 esac
+
+"$(dirname "$0")/bootstrap_node_from_prod_v2.sh" "${ARGS[@]}"
+
+if [[ "$PROFILE" != "base" ]]; then
+  "$(dirname "$0")/apply_node_profile.sh" "${ARGS[@]}" --profile "$PROFILE"
+fi
