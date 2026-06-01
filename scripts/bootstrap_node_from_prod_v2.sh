@@ -241,6 +241,22 @@ sleep 3
 /usr/local/x-ui/x-ui migrate-db || true
 sleep 1
 
+log "Ensure PostgreSQL schema"
+sudo -u postgres psql -d xui -v ON_ERROR_STOP=1 <<SQL
+create table if not exists settings (
+  id bigserial primary key,
+  key text unique,
+  value text
+);
+
+create table if not exists users (
+  id bigserial primary key,
+  username text,
+  password text,
+  login_epoch bigint default 0
+);
+SQL
+
 log "Force real settings in PostgreSQL"
 sudo -u postgres psql -d xui -v ON_ERROR_STOP=1 <<SQL
 insert into settings(key,value)
@@ -289,6 +305,11 @@ set username='\$PANEL_USERNAME',
 where id=(select id from users order by id limit 1);
 SQL
 fi
+
+log "Force x-ui CLI settings too"
+/usr/local/x-ui/x-ui setting -port "$PANEL_PORT" || true
+/usr/local/x-ui/x-ui setting -webBasePath "/$PANEL_WEB_BASE_PATH/" || true
+/usr/local/x-ui/x-ui setting -username "$PANEL_USERNAME" -password "$PANEL_PASSWORD" || true
 
 log "Restart x-ui"
 systemctl restart x-ui
