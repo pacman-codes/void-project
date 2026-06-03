@@ -59,3 +59,8 @@ dev/
 
 # Local lead monitor state
 data/lead_monitor.sqlite3
+
+# Local lead monitor state/secrets
+data/lead_monitor.sqlite3
+data/*.sqlite3
+.env.leads

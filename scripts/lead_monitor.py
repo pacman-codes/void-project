@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import json
 import os
 import sqlite3
 import sys
@@ -46,6 +47,7 @@ class Lead:
     published_ts: int
     summary: str
     subreddit: str
+    author: str
     score: int
     reasons: tuple[str, ...]
 
@@ -193,6 +195,57 @@ DENY_SUBREDDITS = {
 }
 
 
+def normalize_reddit_author(value: str | None) -> str:
+    raw = clean_text(value or "", limit=120).strip()
+
+    if not raw:
+        return ""
+
+    raw = raw.replace("https://www.reddit.com/user/", "")
+    raw = raw.replace("https://old.reddit.com/user/", "")
+    raw = raw.replace("/u/", "")
+    raw = raw.replace("u/", "")
+    raw = raw.strip("/ ")
+
+    return raw
+
+
+def is_bad_author_name(author: str) -> bool:
+    value = author.strip().lower()
+
+    return (
+        not value
+        or value in {"[deleted]", "deleted", "automoderator"}
+        or "suspended" in value
+    )
+
+
+def reddit_author_about_url(author: str) -> str:
+    return f"https://www.reddit.com/user/{urllib.parse.quote(author, safe='')}/about.json"
+
+
+def reddit_author_is_available(author: str, *, timeout: int = 10) -> tuple[bool, str]:
+    if is_bad_author_name(author):
+        return False, "bad_author_name"
+
+    try:
+        data = fetch_url(reddit_author_about_url(author), timeout=timeout)
+        payload = json.loads(data.decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        # 403 is too noisy for unauthenticated Reddit checks and may mean that
+        # Reddit blocked the profile probe, not that the author is suspended.
+        if exc.code in {404, 410}:
+            return False, f"author_unavailable_http_{exc.code}"
+        return True, f"author_check_http_{exc.code}_ignored"
+    except Exception as exc:
+        return True, f"author_check_failed_ignored:{type(exc).__name__}"
+
+    if isinstance(payload, dict) and payload.get("kind") == "t2":
+        return True, "author_ok"
+
+    return False, "author_unavailable_payload"
+
+
 def score_lead(title: str, summary: str, subreddit: str) -> tuple[int, tuple[str, ...]]:
     text = f"{title}\n{summary}".lower()
     score = 0
@@ -272,6 +325,10 @@ def parse_reddit_rss(xml_bytes: bytes, *, query: str, min_ts: int) -> list[Lead]
         published_ts = parse_datetime_to_ts(published)
         summary = clean_text(entry.findtext("atom:content", default="", namespaces=ns), limit=500)
 
+        author = normalize_reddit_author(
+            entry.findtext("atom:author/atom:name", default="", namespaces=ns)
+        )
+
         url = ""
         for link in entry.findall("atom:link", ns):
             href = link.attrib.get("href", "").strip()
@@ -290,6 +347,10 @@ def parse_reddit_rss(xml_bytes: bytes, *, query: str, min_ts: int) -> list[Lead]
             continue
 
         subreddit = extract_subreddit(url)
+
+        if is_bad_author_name(author):
+            continue
+
         score, reasons = score_lead(title, summary, subreddit)
 
         leads.append(
@@ -302,6 +363,7 @@ def parse_reddit_rss(xml_bytes: bytes, *, query: str, min_ts: int) -> list[Lead]
                 published_ts=published_ts,
                 summary=summary,
                 subreddit=subreddit,
+                author=author,
                 score=score,
                 reasons=reasons,
             )
@@ -378,6 +440,7 @@ def format_lead_message(lead: Lead) -> str:
     source = html.escape(lead.source)
     published = html.escape(lead.published or "-")
     subreddit = html.escape(lead.subreddit or "-")
+    author = html.escape(lead.author or "-")
     reasons = html.escape(",".join(lead.reasons) or "-")
     summary = html.escape(lead.summary or "-")
     url = html.escape(lead.url)
@@ -385,6 +448,7 @@ def format_lead_message(lead: Lead) -> str:
     return (
         "🧲 <b>Новый лид</b>\n\n"
         f"<b>Источник:</b> {source} / r/{subreddit}\n"
+        f"<b>Автор:</b> u/{author}\n"
         f"<b>Запрос:</b> <code>{query}</code>\n"
         f"<b>Дата:</b> {published}\n"
         f"<b>Score:</b> {lead.score} <code>{reasons}</code>\n\n"
@@ -419,11 +483,17 @@ def main() -> int:
     parser.add_argument("--max-new", type=int, default=10)
     parser.add_argument("--max-age-days", type=int, default=3)
     parser.add_argument("--min-score", type=int, default=5)
+    parser.add_argument("--check-author", action="store_true", help="Check Reddit author availability before reporting")
     parser.add_argument("--query", action="append", default=[], help="Extra query; may be repeated")
     parser.add_argument("--source", choices=["reddit"], default="reddit")
+    parser.add_argument("--env-file", default=".env", help="Env file with BOT_TOKEN and ADMIN_TELEGRAM_IDS")
     args = parser.parse_args()
 
-    dotenv = load_dotenv(PROJECT_ROOT / ".env")
+    env_path = Path(args.env_file)
+    if not env_path.is_absolute():
+        env_path = PROJECT_ROOT / env_path
+
+    dotenv = load_dotenv(env_path)
     db_path = Path(args.db)
 
     init_db(db_path)
@@ -444,6 +514,15 @@ def main() -> int:
     for lead in leads:
         if lead.score < args.min_score:
             continue
+
+        if args.check_author:
+            author_ok, author_reason = reddit_author_is_available(lead.author)
+            if not author_ok:
+                print(
+                    f"SKIP author unavailable: u/{lead.author} {author_reason} {lead.url}",
+                    file=sys.stderr,
+                )
+                continue
 
         if already_seen(db_path, lead.url):
             continue
@@ -471,7 +550,7 @@ def main() -> int:
         print()
         print(f"[{lead.source}] {lead.published} — {lead.title}")
         print(f"query={lead.query}")
-        print(f"subreddit=r/{lead.subreddit} score={lead.score} reasons={','.join(lead.reasons)}")
+        print(f"subreddit=r/{lead.subreddit} author=u/{lead.author} score={lead.score} reasons={','.join(lead.reasons)}")
         print(lead.url)
 
         sent = False
