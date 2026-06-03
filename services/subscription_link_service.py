@@ -394,6 +394,90 @@ def _dedupe_rows_by_server(rows: list[VPNAccess], by_code: dict[str, object], by
     return selected
 
 
+LEGACY_SUBSCRIPTION_SERVER_NAMES = {"main", "dev", "migration-8449"}
+VLESS_TECHNICAL_DEVICE_MIN = 100
+HY2_TECHNICAL_DEVICE_MIN = 9000
+
+
+def _access_device_number(row: VPNAccess) -> int:
+    try:
+        return int(row.device_number or 0)
+    except Exception:
+        return 0
+
+
+def _access_url_scheme(row: VPNAccess) -> str:
+    config_url = (row.config_url or "").strip()
+
+    if not config_url:
+        return ""
+
+    try:
+        return (urlsplit(config_url).scheme or "").lower()
+    except Exception:
+        return ""
+
+
+def _node_enabled(node: object) -> bool:
+    if isinstance(node, dict):
+        return bool(node.get("enabled", False))
+
+    return bool(getattr(node, "enabled", False))
+
+
+def _node_protocol(node: object) -> str:
+    if isinstance(node, dict):
+        return str(node.get("protocol", "") or "").strip().lower()
+
+    return str(getattr(node, "protocol", "") or "").strip().lower()
+
+
+def _is_subscription_output_row_allowed(
+    row: VPNAccess,
+    by_code: dict[str, object],
+) -> bool:
+    """Allow only production subscription technical rows.
+
+    This intentionally blocks legacy real-device rows even if they were migrated
+    from server_name='main' to a registry server like germany_1.
+
+    Allowed:
+    - VLESS registry technical rows: device_number 100..8999
+    - HY2 backup technical rows: device_number >= 9000
+
+    Blocked:
+    - legacy main/dev/migration rows
+    - old device slots 1/2
+    - disabled/test/unknown registry nodes
+    - unsupported URL schemes
+    """
+    server_name = (row.server_name or "").strip()
+
+    if not server_name or server_name in LEGACY_SUBSCRIPTION_SERVER_NAMES:
+        return False
+
+    node = by_code.get(server_name)
+    if node is None:
+        return False
+
+    if not _node_enabled(node):
+        return False
+
+    if _node_protocol(node) != "vless":
+        return False
+
+    scheme = _access_url_scheme(row)
+    device_number = _access_device_number(row)
+
+    if scheme == "vless":
+        return VLESS_TECHNICAL_DEVICE_MIN <= device_number < HY2_TECHNICAL_DEVICE_MIN
+
+    if scheme in {"hysteria2", "hy2"}:
+        return device_number >= HY2_TECHNICAL_DEVICE_MIN
+
+    return False
+
+
 async def _load_subscription_context(token: str) -> tuple[User, list[VPNAccess], dict[str, object], dict[str, object]]:
     async with async_session_maker() as session:
         link_result = await session.execute(
@@ -431,18 +515,14 @@ async def _load_subscription_context(token: str) -> tuple[User, list[VPNAccess],
 
         by_code, by_endpoint = _load_registry_maps()
 
-        # If registry-managed rows exist, do not expose legacy raw/main rows.
-        # Legacy rows are kept only as a fallback for old users who do not have
-        # any registry-managed access rows yet.
-        registry_rows = [
+        # Strict production subscription filter.
+        # Do not fall back to legacy rows: dirty historical DB rows must not
+        # leak into client subscription profiles.
+        rows = [
             row
             for row in rows
-            if (row.server_name or "").strip()
-            and (row.server_name or "").strip() not in {"main", "dev", "migration-8449"}
+            if _is_subscription_output_row_allowed(row, by_code)
         ]
-
-        if registry_rows:
-            rows = registry_rows
 
         selected_rows = _dedupe_rows_by_server(rows, by_code, by_endpoint)
 
