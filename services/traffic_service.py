@@ -25,6 +25,70 @@ DEFAULT_FREE_TRAFFIC_LIMIT_MB = 3072
 DEFAULT_PAID_OVERUSE_NOTIFY_MB = 153600  # 150 GB
 
 
+TRAFFIC_LEGACY_SERVER_NAMES = {"main", "dev", "migration-8449"}
+TRAFFIC_VLESS_TECHNICAL_DEVICE_MIN = 100
+TRAFFIC_HY2_TECHNICAL_DEVICE_MIN = 9000
+
+
+def _traffic_access_device_number(access: VPNAccess) -> int:
+    try:
+        return int(access.device_number or 0)
+    except Exception:
+        return 0
+
+
+def _traffic_access_url_scheme(access: VPNAccess) -> str:
+    config_url = (access.config_url or "").strip().lower()
+
+    if not config_url or "://" not in config_url:
+        return ""
+
+    return config_url.split("://", 1)[0].strip()
+
+
+def _traffic_access_skip_reason(access: VPNAccess) -> str | None:
+    """Return a non-fatal skip reason for rows that cannot be traffic-synced.
+
+    Traffic sync should only treat enabled production VLESS registry rows as
+    syncable. Backup transports, legacy device slots, disabled/test nodes and
+    unknown rows must not turn the whole user sync into an error.
+    """
+    server_name = (access.server_name or "").strip()
+    scheme = _traffic_access_url_scheme(access)
+    device_number = _traffic_access_device_number(access)
+
+    if not server_name:
+        return "missing server_name"
+
+    if server_name in TRAFFIC_LEGACY_SERVER_NAMES:
+        return f"legacy server_name={server_name}"
+
+    if scheme in {"hysteria2", "hy2"}:
+        return "HY2 traffic stats are not supported by panel sync"
+
+    if scheme and scheme != "vless":
+        return f"unsupported config scheme={scheme}"
+
+    if device_number < TRAFFIC_VLESS_TECHNICAL_DEVICE_MIN:
+        return f"legacy device slot device_number={device_number}"
+
+    if device_number >= TRAFFIC_HY2_TECHNICAL_DEVICE_MIN:
+        return f"non-VLESS backup technical slot device_number={device_number}"
+
+    try:
+        server = get_server_node(server_name)
+    except Exception as exc:
+        return f"unknown registry server {server_name}: {type(exc).__name__}: {exc}"
+
+    if not bool(getattr(server, "enabled", False)):
+        return f"disabled registry server {server_name}"
+
+    if str(getattr(server, "protocol", "") or "").strip().lower() != "vless":
+        return f"unsupported registry protocol={getattr(server, 'protocol', None)}"
+
+    return None
+
+
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     raw = os.getenv(name)
 
@@ -518,6 +582,7 @@ async def collect_user_panel_traffic(telegram_id: int) -> dict[str, Any] | None:
     legacy_inbound_id = int(getattr(service, "inbound_id", 0) or 0)
 
     records: list[dict[str, Any]] = []
+    skipped: list[str] = []
     errors: list[str] = []
     total_bytes = 0
 
@@ -527,25 +592,24 @@ async def collect_user_panel_traffic(telegram_id: int) -> dict[str, Any] | None:
             f"server={access.server_name or '-'}, external_id={_mask(access.external_id)}"
         )
 
+        skip_reason = _traffic_access_skip_reason(access)
+        if skip_reason:
+            skipped.append(label + f" — {skip_reason}")
+            continue
+
         if not access.external_id:
             errors.append(label + " — no external_id")
             continue
 
-        panel_label = "legacy"
+        panel_label = "registry"
         inbound_id = legacy_inbound_id
 
         try:
             server_name = (access.server_name or "").strip()
-
-            if server_name and server_name not in {"main", "dev"}:
-                server = get_server_node(server_name)
-                panel = _make_registry_panel_client(server)
-                inbound_id = int(server.inbound_id)
-                panel_label = server.code
-            else:
-                if legacy_panel is None:
-                    legacy_panel = service._get_panel_client()
-                panel = legacy_panel
+            server = get_server_node(server_name)
+            panel = _make_registry_panel_client(server)
+            inbound_id = int(server.inbound_id)
+            panel_label = server.code
 
             stat = await _get_client_traffic_for_access(
                 panel=panel,
@@ -588,8 +652,10 @@ async def collect_user_panel_traffic(telegram_id: int) -> dict[str, Any] | None:
         "telegram_id": telegram_id,
         "db_snapshot": db_snapshot,
         "records": records,
+        "skipped": skipped,
         "errors": errors,
         "active_access_count": len(accesses),
+        "skipped_access_count": len(skipped),
         "synced_access_count": len(records),
         "total_bytes": total_bytes,
         "total_mb": _bytes_to_mb(total_bytes),
@@ -676,7 +742,7 @@ async def sync_user_traffic_from_panel(
             actor_telegram_id=actor_telegram_id,
             source=source,
             status="ok",
-            message="Panel traffic sync skipped because there are no active access records",
+            message="Panel traffic sync skipped because there are no syncable active access records",
             details={
                 "old_used_mb": old_used_mb,
                 "new_used_mb": new_used_mb,
