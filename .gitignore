@@ -56,3 +56,6 @@ dist/
 
 # accidental nested copy
 dev/
+
+# Local lead monitor state
+data/lead_monitor.sqlite3
