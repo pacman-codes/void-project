@@ -345,6 +345,11 @@ def _server_display_name(row: VPNAccess, by_code: dict[str, object], by_endpoint
         if display_name:
             return display_name
 
+    if server_name == "cdn_selectel_xhttp":
+        device_name = (getattr(row, "device_name", None) or "").strip()
+        if device_name:
+            return device_name
+
     if server_name and server_name != "main":
         return server_name.replace("_", "-")
 
@@ -452,6 +457,17 @@ def _is_subscription_output_row_allowed(
     - unsupported URL schemes
     """
     server_name = (row.server_name or "").strip()
+    config_url = (row.config_url or "").strip()
+    device_name = (getattr(row, "device_name", None) or "").strip()
+
+    # Manual whitelist/mobile CDN row. Keep this narrow on purpose:
+    # do not allow arbitrary unknown rows into normal subscriptions.
+    if (
+        server_name == "cdn_selectel_xhttp"
+        and device_name == "мобилка"
+        and config_url.startswith(("vless://", "hysteria2://", "hy2://"))
+    ):
+        return True
 
     if not server_name or server_name in LEGACY_SUBSCRIPTION_SERVER_NAMES:
         return False
