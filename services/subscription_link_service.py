@@ -463,7 +463,7 @@ def _is_subscription_output_row_allowed(
     # Manual whitelist/mobile CDN row. Keep this narrow on purpose:
     # do not allow arbitrary unknown rows into normal subscriptions.
     if (
-        server_name == "cdn_selectel_xhttp"
+        server_name in {"cdn_selectel_xhttp", "cdn_selectel_fi", "cdn_selectel_swpg"}
         and device_name in {"мобилка", "FI CDN", "SWPG CDN"}
         and config_url.startswith(("vless://", "hysteria2://", "hy2://"))
     ):
