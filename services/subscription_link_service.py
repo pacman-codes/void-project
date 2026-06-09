@@ -464,7 +464,7 @@ def _is_subscription_output_row_allowed(
     # do not allow arbitrary unknown rows into normal subscriptions.
     if (
         server_name == "cdn_selectel_xhttp"
-        and device_name == "мобилка"
+        and device_name in {"мобилка", "FI CDN", "SWPG CDN"}
         and config_url.startswith(("vless://", "hysteria2://", "hy2://"))
     ):
         return True
