@@ -345,7 +345,7 @@ def _server_display_name(row: VPNAccess, by_code: dict[str, object], by_endpoint
         if display_name:
             return display_name
 
-    if server_name == "cdn_selectel_xhttp":
+    if server_name in {"cdn_selectel_xhttp", "cdn_selectel_fi", "cdn_selectel_swpg", "cdn_gcore_swpg"}:
         device_name = (getattr(row, "device_name", None) or "").strip()
         if device_name:
             return device_name
@@ -463,8 +463,8 @@ def _is_subscription_output_row_allowed(
     # Manual whitelist/mobile CDN row. Keep this narrow on purpose:
     # do not allow arbitrary unknown rows into normal subscriptions.
     if (
-        server_name in {"cdn_selectel_xhttp", "cdn_selectel_fi", "cdn_selectel_swpg"}
-        and device_name in {"мобилка", "FI CDN", "SWPG CDN"}
+        server_name in {"cdn_selectel_xhttp", "cdn_selectel_fi", "cdn_selectel_swpg", "cdn_gcore_swpg"}
+        and device_name in {"мобилка", "FI CDN", "SWPG CDN", "Gcore CDN"}
         and config_url.startswith(("vless://", "hysteria2://", "hy2://"))
     ):
         return True
