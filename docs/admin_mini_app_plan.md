@@ -64,9 +64,11 @@ Layers:
 - `webhook_server.py`: HTTP route registration and request/response handling.
 - `services/admin_miniapp_auth.py`: Telegram WebApp `initData` verification and admin allowlist checks.
 - `services/admin_miniapp_service.py`: read-only DB queries, safe serializers, and masking/redaction.
-- Future frontend: a minimal Telegram WebApp bundle can call these routes by passing `window.Telegram.WebApp.initData` in `X-Telegram-Init-Data`.
+- `GET /miniapp/admin`: minimal static HTML/CSS/JS shell served by `aiohttp`. The shell is not proof of access; every data request still sends `window.Telegram.WebApp.initData` in `X-Telegram-Init-Data` and is checked by the backend.
 
 v0 route handlers must only call read-only DB/registry helpers. They must not call `VPNService` mutators, payment services, traffic sync/reset functions, bot send-message functions, shell scripts, deployment scripts, or panel mutation APIs.
+
+The frontend v0 has no external CDN dependencies and does not persist `initData`. For local development only, it exposes a textarea where a developer can paste `initData`; that value is kept in memory for the current page session only.
 
 ## v0 Screens
 
@@ -82,7 +84,12 @@ No large UI library is needed unless the repo later adds a frontend toolchain.
 
 ## v0 Read-Only API Routes
 
-All routes require Telegram Mini App `initData` in the `X-Telegram-Init-Data` header. They may also accept `Authorization: tma <initData>` for non-browser clients.
+- `GET /miniapp/admin`
+  - Returns the minimal Admin Mini App HTML shell.
+  - Does not return protected data.
+  - Uses Telegram `window.Telegram.WebApp.initData` when available and provides a non-persistent manual paste fallback for local testing.
+
+All JSON routes require Telegram Mini App `initData` in the `X-Telegram-Init-Data` header. They may also accept `Authorization: tma <initData>` for non-browser clients.
 
 - `GET /miniapp/admin/me`
   - Returns verified admin Telegram identity and `read_only: true`.
@@ -125,6 +132,7 @@ Security rules:
 - Do not use subscription tokens, config links, or bot command auth as Mini App API auth.
 - Keep `initData` out of query strings because URLs are often logged.
 - Reject stale `initData` using `ADMIN_MINIAPP_INITDATA_MAX_AGE_SECONDS` unless explicitly set to `0` for a controlled local test.
+- Render API data with DOM text nodes or `textContent`; do not inject API response data through `innerHTML`.
 
 ## Allowlist Model
 
