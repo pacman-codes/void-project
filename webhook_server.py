@@ -283,6 +283,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       }
     }
   </style>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
   <main class="page">
@@ -414,11 +415,41 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         parent.appendChild(card);
       }
 
-      function getTelegramInitData() {
-        var telegram = window.Telegram && window.Telegram.WebApp;
-        if (!telegram) {
-          return "";
+      function getInitDataFromUrl() {
+        var sources = [window.location.hash, window.location.search];
+
+        for (var i = 0; i < sources.length; i += 1) {
+          var source = sources[i] || "";
+          if (!source) {
+            continue;
+          }
+
+          if (source.charAt(0) === "#" || source.charAt(0) === "?") {
+            source = source.slice(1);
+          }
+
+          try {
+            var params = new URLSearchParams(source);
+            var value = params.get("tgWebAppData");
+            if (value) {
+              return value;
+            }
+          } catch (error) {
+            // Ignore malformed local/dev URLs.
+          }
         }
+
+        return "";
+      }
+
+      function getTelegramInitData() {
+        var urlInitData = getInitDataFromUrl();
+        var telegram = window.Telegram && window.Telegram.WebApp;
+
+        if (!telegram) {
+          return urlInitData;
+        }
+
         try {
           if (telegram.ready) {
             telegram.ready();
@@ -427,9 +458,10 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
             telegram.expand();
           }
         } catch (error) {
-          // The UI still works with manual initData fallback in local dev.
+          // The UI still works with URL/manual initData fallback.
         }
-        return telegram.initData || "";
+
+        return telegram.initData || urlInitData;
       }
 
       function authHeaders() {
