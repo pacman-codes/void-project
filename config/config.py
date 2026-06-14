@@ -39,6 +39,9 @@ class Settings:
     WEBHOOK_HOST: str
     WEBHOOK_PORT: int
 
+    ADMIN_MINIAPP_TELEGRAM_IDS: str
+    ADMIN_MINIAPP_INITDATA_MAX_AGE_SECONDS: int
+
     @property
     def bot_token(self) -> str:
         return self.BOT_TOKEN
@@ -91,6 +94,14 @@ class Settings:
     def webhook_port(self) -> int:
         return self.WEBHOOK_PORT
 
+    @property
+    def admin_miniapp_telegram_ids(self) -> str:
+        return self.ADMIN_MINIAPP_TELEGRAM_IDS
+
+    @property
+    def admin_miniapp_initdata_max_age_seconds(self) -> int:
+        return self.ADMIN_MINIAPP_INITDATA_MAX_AGE_SECONDS
+
 
 def load_settings() -> Settings:
     panel_path = os.getenv("PANEL_PATH", "").strip()
@@ -114,6 +125,10 @@ def load_settings() -> Settings:
         YOOKASSA_RETURN_URL=os.getenv("YOOKASSA_RETURN_URL", "").strip(),
         WEBHOOK_HOST=os.getenv("WEBHOOK_HOST", "127.0.0.1").strip(),
         WEBHOOK_PORT=int(os.getenv("WEBHOOK_PORT", "8081")),
+        ADMIN_MINIAPP_TELEGRAM_IDS=os.getenv("ADMIN_MINIAPP_TELEGRAM_IDS", "").strip(),
+        ADMIN_MINIAPP_INITDATA_MAX_AGE_SECONDS=int(
+            os.getenv("ADMIN_MINIAPP_INITDATA_MAX_AGE_SECONDS", "86400")
+        ),
     )
 
 
