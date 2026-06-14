@@ -135,15 +135,18 @@ async def expire_one_paid_user(telegram_id: int, dry_run: bool = False) -> dict[
             )
             deleted.append(label)
         except Exception as exc:
-            errors.append(label + f" — {type(exc).__name__}: {exc}")
+            error_text = str(exc)
+            if access.client_uuid:
+                error_text = error_text.replace(access.client_uuid, _mask(access.client_uuid))
+            errors.append(label + f" — {type(exc).__name__}: {error_text}")
 
     if errors:
         await log_user_event(
-            event_type="subscription_expiry_failed",
+            event_type="subscription_expiry_panel_cleanup_failed",
             target_telegram_id=telegram_id,
             source="expiry_service",
-            status="error",
-            message="Failed to delete extra paid clients from panel",
+            status="warning",
+            message="Panel cleanup had errors; continuing DB downgrade",
             details={
                 **summary,
                 "deleted": deleted,
@@ -151,14 +154,6 @@ async def expire_one_paid_user(telegram_id: int, dry_run: bool = False) -> dict[
                 "errors": errors,
             },
         )
-        return {
-            **summary,
-            "status": "error",
-            "message": "Panel delete errors; DB state was not changed",
-            "deleted": deleted,
-            "skipped": skipped,
-            "errors": errors,
-        }
 
     async with async_session_maker() as session:
         user_result = await session.execute(
@@ -216,6 +211,8 @@ async def expire_one_paid_user(telegram_id: int, dry_run: bool = False) -> dict[
             **summary,
             "deleted": deleted,
             "skipped": skipped,
+            "errors": errors,
+            "panel_cleanup_had_errors": bool(errors),
             "disabled_access_ids": disabled_access_ids,
             "new_access_type": "free",
             "new_device_limit": 1,
@@ -229,6 +226,8 @@ async def expire_one_paid_user(telegram_id: int, dry_run: bool = False) -> dict[
         "message": "Expired paid user downgraded to free",
         "deleted": deleted,
         "skipped": skipped,
+        "errors": errors,
+        "panel_cleanup_had_errors": bool(errors),
         "disabled_access_ids": disabled_access_ids,
         "new_access_type": "free",
         "new_device_limit": 1,
