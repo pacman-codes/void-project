@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 ADMIN_MINIAPP_HTML = """<!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -208,7 +208,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
     table {
       width: 100%;
       border-collapse: collapse;
-      min-width: 720px;
+      min-width: 820px;
     }
 
     th, td {
@@ -227,6 +227,27 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
     }
 
     tr:last-child td { border-bottom: 0; }
+
+    .users-cards {
+      display: none;
+    }
+
+    .user-card {
+      display: grid;
+      gap: 8px;
+    }
+
+    .user-card-title {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .user-card-title strong {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
 
     .kv {
       display: grid;
@@ -282,6 +303,17 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         grid-template-columns: repeat(4, minmax(0, 1fr));
       }
     }
+
+    @media (max-width: 760px) {
+      .desktop-users {
+        display: none;
+      }
+
+      .users-cards {
+        display: grid;
+        gap: 8px;
+      }
+    }
   </style>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -290,65 +322,65 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
     <header class="topbar">
       <div class="title">
         <h1>VOID Admin</h1>
-        <p>Read-only internal Mini App v0</p>
+        <p>Внутренняя панель только для чтения</p>
       </div>
-      <button id="refreshButton" class="primary" type="button">Refresh</button>
+      <button id="refreshButton" class="primary" type="button">Обновить</button>
     </header>
 
     <section id="authBanner" class="banner warn" hidden></section>
 
     <section class="panel">
-      <h2>Auth</h2>
+      <h2>Доступ</h2>
       <div id="meBlock" class="stack"></div>
       <details id="devAuthFallback">
-        <summary>Local initData fallback</summary>
+        <summary>Локальная проверка initData</summary>
         <div class="stack">
-          <textarea id="manualInitData" spellcheck="false" autocomplete="off" placeholder="Paste Telegram WebApp initData for local testing"></textarea>
-          <button id="useManualInitData" type="button">Use pasted initData</button>
-          <p class="muted">Not stored. Cleared on reload.</p>
+          <textarea id="manualInitData" spellcheck="false" autocomplete="off" placeholder="Вставьте Telegram WebApp initData для локальной проверки"></textarea>
+          <button id="useManualInitData" type="button">Использовать initData</button>
+          <p class="muted">Не сохраняется. Очищается при перезагрузке.</p>
         </div>
       </details>
     </section>
 
     <section class="panel">
-      <h2>Stats</h2>
+      <h2>Статистика</h2>
       <div id="statsCards" class="cards"></div>
     </section>
 
     <section class="grid two">
       <section class="panel">
-        <h2>Users</h2>
+        <h2>Пользователи</h2>
         <form id="userSearchForm" class="form-row">
-          <input id="userSearchInput" type="search" placeholder="Telegram ID or username" autocomplete="off">
-          <button type="submit">Search</button>
+          <input id="userSearchInput" type="search" placeholder="Telegram ID или username" autocomplete="off">
+          <button type="submit">Найти</button>
         </form>
         <div id="usersTable"></div>
       </section>
 
       <section class="panel">
-        <h2>Selected User</h2>
+        <h2>Пользователь</h2>
         <div id="userDetail" class="stack">
-          <p class="muted">Select a user from the table.</p>
+          <p class="muted">Выберите пользователя из списка.</p>
         </div>
       </section>
     </section>
 
     <section class="grid two">
       <section class="panel">
-        <h2>Recent User Events</h2>
+        <h2>События</h2>
         <div id="eventsList" class="stack">
-          <p class="muted">No user selected.</p>
+          <p class="muted">Пользователь не выбран.</p>
         </div>
       </section>
 
       <section class="panel">
-        <h2>Traffic Summary</h2>
+        <h2>Трафик</h2>
         <div id="trafficSummary" class="stack"></div>
       </section>
     </section>
 
     <section class="panel">
-      <h2>Servers</h2>
+      <h2>Серверы</h2>
       <div id="serversBlock" class="stack"></div>
     </section>
   </main>
@@ -371,9 +403,123 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
           return "-";
         }
         if (typeof value === "boolean") {
-          return value ? "yes" : "no";
+          return yesNo(value);
         }
         return String(value);
+      }
+
+      function yesNo(value) {
+        return value ? "Да" : "Нет";
+      }
+
+      function activeLabel(value) {
+        return value ? "Активен" : "Неактивен";
+      }
+
+      function accessLabel(value) {
+        var normalized = String(value || "").trim().toLowerCase();
+        if (normalized === "paid") {
+          return "PRO";
+        }
+        if (normalized === "free") {
+          return "Free";
+        }
+        if (normalized === "trial") {
+          return "Trial";
+        }
+        return "Без доступа";
+      }
+
+      function formatDateParts(date) {
+        var formatter = new Intl.DateTimeFormat("ru-RU", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false
+        });
+        var parts = formatter.formatToParts(date);
+
+        function part(type) {
+          for (var i = 0; i < parts.length; i += 1) {
+            if (parts[i].type === type) {
+              return parts[i].value;
+            }
+          }
+          return "";
+        }
+
+        return part("day") + " " + part("month") + " " + part("year") + ", " + part("hour") + ":" + part("minute");
+      }
+
+      function formatDate(value) {
+        if (!value) {
+          return "-";
+        }
+
+        var date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+          return "-";
+        }
+
+        return formatDateParts(date);
+      }
+
+      function formatUnixSeconds(value) {
+        if (value === null || value === undefined || value === "") {
+          return "-";
+        }
+
+        var seconds = Number(value);
+        if (!Number.isFinite(seconds)) {
+          return "-";
+        }
+
+        return formatDateParts(new Date(seconds * 1000));
+      }
+
+      function formatOneDecimal(value) {
+        return value.toFixed(1).replace(/\\.0$/, "");
+      }
+
+      function formatTrafficMb(value) {
+        if (value === null || value === undefined || value === "") {
+          return "-";
+        }
+
+        var mb = Number(value);
+        if (!Number.isFinite(mb)) {
+          return "-";
+        }
+
+        mb = Math.max(0, mb);
+        if (mb < 1024) {
+          return Math.round(mb) + " MB";
+        }
+
+        var gb = mb / 1024;
+        if (gb < 1024) {
+          return formatOneDecimal(gb) + " GB";
+        }
+
+        return formatOneDecimal(gb / 1024) + " TB";
+      }
+
+      function formatTrafficPair(usedMb, limitMb) {
+        var used = formatTrafficMb(usedMb);
+        var limit = Number(limitMb);
+        if (Number.isFinite(limit) && limit > 0) {
+          return used + " / " + formatTrafficMb(limit);
+        }
+        return used;
+      }
+
+      function eventSummary(event) {
+        if (!event) {
+          return "-";
+        }
+        return text(event.event_type) + ", " + formatDate(event.created_at);
       }
 
       function node(tag, className, value) {
@@ -416,7 +562,10 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       }
 
       function getInitDataFromUrl() {
-        var sources = [window.location.hash, window.location.search];
+        var sources = [
+          window.location.search || "",
+          window.location.hash || ""
+        ];
 
         for (var i = 0; i < sources.length; i += 1) {
           var source = sources[i] || "";
@@ -424,18 +573,26 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
             continue;
           }
 
-          if (source.charAt(0) === "#" || source.charAt(0) === "?") {
+          if (source.charAt(0) === "?" || source.charAt(0) === "#") {
             source = source.slice(1);
           }
 
+          var marker = "tgWebAppData=";
+          var index = source.indexOf(marker);
+          if (index === -1) {
+            continue;
+          }
+
+          var value = source.slice(index + marker.length);
+          var ampIndex = value.indexOf("&");
+          if (ampIndex !== -1) {
+            value = value.slice(0, ampIndex);
+          }
+
           try {
-            var params = new URLSearchParams(source);
-            var value = params.get("tgWebAppData");
-            if (value) {
-              return value;
-            }
+            return decodeURIComponent(value);
           } catch (error) {
-            // Ignore malformed local/dev URLs.
+            return value;
           }
         }
 
@@ -472,7 +629,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
 
       async function api(path) {
         if (!state.initData) {
-          setBanner("warn", "Telegram initData is missing. Open from Telegram or paste initData for local testing.");
+          setBanner("warn", "Telegram initData не найден. Откройте Mini App из Telegram или вставьте initData для локальной проверки.");
           throw new Error("missing initData");
         }
 
@@ -496,11 +653,11 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         if (!response.ok) {
           var message = data.message || data.error || response.statusText || "Request failed";
           if (response.status === 401) {
-            setBanner("error", "Authentication failed (401): " + message);
+            setBanner("error", "Ошибка авторизации (401): " + message);
           } else if (response.status === 403) {
-            setBanner("error", "Access denied (403): this Telegram ID is not allowlisted.");
+            setBanner("error", "Доступ запрещён (403): Telegram ID не в allowlist.");
           } else {
-            setBanner("error", "Request failed (" + response.status + "): " + message);
+            setBanner("error", "Ошибка запроса (" + response.status + "): " + message);
           }
           throw new Error(message);
         }
@@ -511,23 +668,24 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       function renderMe(me) {
         var block = byId("meBlock");
         clear(block);
-        addKv(block, "telegram_id", me.telegram_id);
-        addKv(block, "username", me.username);
-        addKv(block, "first_name", me.first_name);
-        addKv(block, "last_name", me.last_name);
-        addKv(block, "read_only", me.read_only);
-        addKv(block, "auth_date", me.auth_date);
+        addKv(block, "Telegram ID", me.telegram_id);
+        addKv(block, "Username", me.username);
+        addKv(block, "Имя", me.first_name);
+        addKv(block, "Фамилия", me.last_name);
+        addKv(block, "Только чтение", yesNo(Boolean(me.read_only)));
+        addKv(block, "Дата входа", formatUnixSeconds(me.auth_date));
       }
 
       function renderStats(stats) {
         var cards = byId("statsCards");
         clear(cards);
-        addCard(cards, "Users", stats.users && stats.users.total, "active " + text(stats.users && stats.users.active));
-        addCard(cards, "Paid", stats.users && stats.users.paid, "expired " + text(stats.users && stats.users.expired_paid));
-        addCard(cards, "Free", stats.users && stats.users.free, "trial " + text(stats.users && stats.users.trial));
-        addCard(cards, "Access rows", stats.access && stats.access.active_access_rows, "links " + text(stats.access && stats.access.active_subscription_links));
-        addCard(cards, "Traffic used", stats.traffic && stats.traffic.total_used_mb, "MB total");
-        addCard(cards, "Generated", stats.generated_at, "");
+        addCard(cards, "Пользователи", stats.users && stats.users.total, "");
+        addCard(cards, "Активные", stats.users && stats.users.active, "");
+        addCard(cards, "PRO", stats.users && stats.users.paid, "истекло " + text(stats.users && stats.users.expired_paid));
+        addCard(cards, "Free", stats.users && stats.users.free, "");
+        addCard(cards, "Trial", stats.users && stats.users.trial, "");
+        addCard(cards, "Использовано", formatTrafficMb(stats.traffic && stats.traffic.total_used_mb), "");
+        addCard(cards, "Обновлено", formatDate(stats.generated_at), "");
       }
 
       function renderUsers(payload) {
@@ -536,15 +694,15 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
 
         var users = payload.users || [];
         if (!users.length) {
-          target.appendChild(node("p", "muted", "No users found."));
+          target.appendChild(node("p", "muted", "Пользователи не найдены."));
           return;
         }
 
-        var wrap = node("div", "table-wrap");
+        var wrap = node("div", "table-wrap desktop-users");
         var table = document.createElement("table");
         var thead = document.createElement("thead");
         var headRow = document.createElement("tr");
-        ["telegram_id", "username", "access", "active", "expiry", "traffic", "rows", "last event", ""].forEach(function (label) {
+        ["Telegram ID", "Username", "Тариф", "Активен", "До", "Трафик", "Конфиги", "Последнее событие", ""].forEach(function (label) {
           headRow.appendChild(node("th", "", label));
         });
         thead.appendChild(headRow);
@@ -555,15 +713,15 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
           var row = document.createElement("tr");
           row.appendChild(node("td", "", user.telegram_id));
           row.appendChild(node("td", "", user.username));
-          row.appendChild(node("td", "", user.access_type));
-          row.appendChild(node("td", user.is_active ? "status-ok" : "status-bad", user.is_active));
-          row.appendChild(node("td", "", user.subscription_expiry));
-          row.appendChild(node("td", "", text(user.traffic_used) + " / " + text(user.traffic_limit)));
+          row.appendChild(node("td", "", accessLabel(user.access_type)));
+          row.appendChild(node("td", user.is_active ? "status-ok" : "status-bad", yesNo(Boolean(user.is_active))));
+          row.appendChild(node("td", "", formatDate(user.subscription_expiry)));
+          row.appendChild(node("td", "", formatTrafficPair(user.traffic_used, user.traffic_limit)));
           row.appendChild(node("td", "", user.active_access_row_count));
-          row.appendChild(node("td", "", user.last_event ? text(user.last_event.event_type) + " " + text(user.last_event.created_at) : "-"));
+          row.appendChild(node("td", "", eventSummary(user.last_event)));
 
           var actionCell = document.createElement("td");
-          var button = node("button", "", "Open");
+          var button = node("button", "", "Открыть");
           button.type = "button";
           button.addEventListener("click", function () {
             selectUser(user.telegram_id);
@@ -575,6 +733,30 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         table.appendChild(tbody);
         wrap.appendChild(table);
         target.appendChild(wrap);
+
+        var cards = node("div", "users-cards");
+        users.forEach(function (user) {
+          var card = node("div", "list-item user-card");
+          var title = node("div", "user-card-title");
+          title.appendChild(node("strong", "", text(user.telegram_id) + " " + text(user.username)));
+
+          var cardButton = node("button", "", "Открыть");
+          cardButton.type = "button";
+          cardButton.addEventListener("click", function () {
+            selectUser(user.telegram_id);
+          });
+          title.appendChild(cardButton);
+          card.appendChild(title);
+
+          addKv(card, "Тариф", accessLabel(user.access_type));
+          addKv(card, "Активен", yesNo(Boolean(user.is_active)));
+          addKv(card, "До", formatDate(user.subscription_expiry));
+          addKv(card, "Трафик", formatTrafficPair(user.traffic_used, user.traffic_limit));
+          addKv(card, "Конфиги", user.active_access_row_count);
+          addKv(card, "Последнее событие", eventSummary(user.last_event));
+          cards.appendChild(card);
+        });
+        target.appendChild(cards);
       }
 
       function renderUserDetail(detail) {
@@ -583,42 +765,42 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
 
         var user = detail.user || {};
         var profile = node("div", "stack");
-        addKv(profile, "telegram_id", user.telegram_id);
-        addKv(profile, "username", user.username);
-        addKv(profile, "name", [user.first_name, user.last_name].filter(Boolean).join(" "));
-        addKv(profile, "access_type", user.access_type);
-        addKv(profile, "is_active", user.is_active);
-        addKv(profile, "subscription_expiry", user.subscription_expiry);
-        addKv(profile, "traffic", text(user.traffic_used) + " / " + text(user.traffic_limit));
-        addKv(profile, "device_limit", user.device_limit);
-        addKv(profile, "created_at", user.created_at);
+        addKv(profile, "Telegram ID", user.telegram_id);
+        addKv(profile, "Username", user.username);
+        addKv(profile, "Имя", [user.first_name, user.last_name].filter(Boolean).join(" "));
+        addKv(profile, "Тариф", accessLabel(user.access_type));
+        addKv(profile, "Активен", activeLabel(Boolean(user.is_active)));
+        addKv(profile, "Подписка до", formatDate(user.subscription_expiry));
+        addKv(profile, "Трафик", formatTrafficPair(user.traffic_used, user.traffic_limit));
+        addKv(profile, "Лимит устройств", user.device_limit);
+        addKv(profile, "Создан", formatDate(user.created_at));
         target.appendChild(profile);
 
-        var accessTitle = node("h2", "", "Active Access");
+        var accessTitle = node("h2", "", "Активные конфиги");
         target.appendChild(accessTitle);
         var accessList = node("div", "stack");
         (detail.active_accesses || []).forEach(function (access) {
           var item = node("div", "list-item");
-          addKv(item, "server_name", access.server_name);
-          addKv(item, "device_name", access.device_name);
-          addKv(item, "is_active", access.is_active);
+          addKv(item, "Сервер", access.server_name);
+          addKv(item, "Устройство", access.device_name);
+          addKv(item, "Активен", yesNo(Boolean(access.is_active)));
           accessList.appendChild(item);
         });
         if (!accessList.childNodes.length) {
-          accessList.appendChild(node("p", "muted", "No active access rows."));
+          accessList.appendChild(node("p", "muted", "Активных конфигов нет."));
         }
         target.appendChild(accessList);
 
-        var linksTitle = node("h2", "", "Subscription Links");
+        var linksTitle = node("h2", "", "Подписочные ссылки");
         target.appendChild(linksTitle);
         var linksBlock = node("div", "stack");
-        addKv(linksBlock, "exists", detail.subscription_links && detail.subscription_links.exists);
-        addKv(linksBlock, "active_count", detail.subscription_links && detail.subscription_links.active_count);
+        addKv(linksBlock, "Есть", yesNo(Boolean(detail.subscription_links && detail.subscription_links.exists)));
+        addKv(linksBlock, "Активных", detail.subscription_links && detail.subscription_links.active_count);
         (detail.subscription_links && detail.subscription_links.items || []).forEach(function (link) {
           var item = node("div", "list-item");
-          addKv(item, "is_active", link.is_active);
-          addKv(item, "token_masked", link.token_masked);
-          addKv(item, "last_used_at", link.last_used_at);
+          addKv(item, "Активна", yesNo(Boolean(link.is_active)));
+          addKv(item, "Токен", link.token_masked);
+          addKv(item, "Последнее использование", formatDate(link.last_used_at));
           linksBlock.appendChild(item);
         });
         target.appendChild(linksBlock);
@@ -630,18 +812,18 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
 
         var events = payload.events || [];
         if (!events.length) {
-          target.appendChild(node("p", "muted", "No recent events."));
+          target.appendChild(node("p", "muted", "Событий нет."));
           return;
         }
 
         events.forEach(function (event) {
           var item = node("div", "list-item");
-          addKv(item, "created_at", event.created_at);
-          addKv(item, "event_type", event.event_type);
-          addKv(item, "status", event.status);
-          addKv(item, "source", event.source);
-          addKv(item, "actor", event.actor_telegram_id);
-          addKv(item, "message", event.message);
+          addKv(item, "Дата", formatDate(event.created_at));
+          addKv(item, "Событие", event.event_type);
+          addKv(item, "Статус", event.status);
+          addKv(item, "Источник", event.source);
+          addKv(item, "Actor", event.actor_telegram_id);
+          addKv(item, "Сообщение", event.message);
           if (event.details) {
             var pre = document.createElement("pre");
             pre.textContent = JSON.stringify(event.details, null, 2);
@@ -654,16 +836,16 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       function renderTraffic(summary) {
         var target = byId("trafficSummary");
         clear(target);
-        addKv(target, "total_users", summary.total_users);
-        addKv(target, "total_used_mb", summary.total_used_mb);
-        addKv(target, "total_limit_mb", summary.total_limit_mb);
+        var totals = node("div", "cards");
+        addCard(totals, "Пользователи", summary.total_users, "");
+        addCard(totals, "Использовано", formatTrafficMb(summary.total_used_mb), "");
+        target.appendChild(totals);
 
         (summary.by_access_type || []).forEach(function (row) {
           var item = node("div", "list-item");
-          addKv(item, "access_type", row.access_type);
-          addKv(item, "users", row.users);
-          addKv(item, "traffic_used_mb", row.traffic_used_mb);
-          addKv(item, "traffic_limit_mb", row.traffic_limit_mb);
+          addKv(item, "Тариф", accessLabel(row.access_type));
+          addKv(item, "Пользователи", row.users);
+          addKv(item, "Использовано", formatTrafficMb(row.traffic_used_mb));
           target.appendChild(item);
         });
       }
@@ -671,14 +853,14 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       function renderServers(payload) {
         var target = byId("serversBlock");
         clear(target);
-        addKv(target, "registry_available", payload.registry_available);
+        addKv(target, "Реестр доступен", yesNo(Boolean(payload.registry_available)));
         if (payload.error) {
-          addKv(target, "error", payload.error.type + ": " + payload.error.message);
+          addKv(target, "Ошибка", payload.error.type + ": " + payload.error.message);
         }
 
         var servers = payload.servers || [];
         if (!servers.length) {
-          target.appendChild(node("p", "muted", "No servers returned."));
+          target.appendChild(node("p", "muted", "Серверы не найдены."));
           return;
         }
 
@@ -686,7 +868,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         var table = document.createElement("table");
         var thead = document.createElement("thead");
         var headRow = document.createElement("tr");
-        ["code", "name", "enabled", "protocol", "network", "endpoint", "provider"].forEach(function (label) {
+        ["Код", "Название", "Включён", "Протокол", "Сеть", "Endpoint", "Провайдер"].forEach(function (label) {
           headRow.appendChild(node("th", "", label));
         });
         thead.appendChild(headRow);
@@ -697,7 +879,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
           var row = document.createElement("tr");
           row.appendChild(node("td", "", server.code));
           row.appendChild(node("td", "", server.display_name));
-          row.appendChild(node("td", server.enabled ? "status-ok" : "status-bad", server.enabled));
+          row.appendChild(node("td", server.enabled ? "status-ok" : "status-bad", yesNo(Boolean(server.enabled))));
           row.appendChild(node("td", "", server.protocol));
           row.appendChild(node("td", "", server.network));
           row.appendChild(node("td", "", server.public_endpoint));
@@ -730,7 +912,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         byId("refreshButton").disabled = true;
         try {
           var me = await api("/me");
-          setBanner("ok", "Authenticated as Telegram ID " + text(me.telegram_id) + ". Read-only mode.");
+          setBanner("ok", "Доступ подтверждён: Telegram ID " + text(me.telegram_id) + ". Режим только для чтения.");
           renderMe(me);
 
           var results = await Promise.all([
@@ -777,7 +959,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       if (state.initData) {
         loadDashboard();
       } else {
-        setBanner("warn", "Telegram initData was not found. Open from Telegram or paste initData for local testing.");
+        setBanner("warn", "Telegram initData не найден. Откройте Mini App из Telegram или вставьте initData для локальной проверки.");
       }
     }());
   </script>
