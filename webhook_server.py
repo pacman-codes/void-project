@@ -199,6 +199,23 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       margin-bottom: 10px;
     }
 
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .filter-button {
+      min-height: 34px;
+      padding: 7px 10px;
+    }
+
+    .filter-button.active {
+      border-color: #2e7aa4;
+      background: #155f84;
+    }
+
     .table-wrap {
       overflow-x: auto;
       border: 1px solid var(--line);
@@ -350,10 +367,12 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
     <section class="grid two">
       <section class="panel">
         <h2>Пользователи</h2>
+        <div id="userFilters" class="filters"></div>
         <form id="userSearchForm" class="form-row">
           <input id="userSearchInput" type="search" placeholder="Telegram ID или username" autocomplete="off">
           <button type="submit">Найти</button>
         </form>
+        <p class="muted">Без поиска применяется выбранный фильтр. Поиск ищет по всем пользователям.</p>
         <div id="usersTable"></div>
       </section>
 
@@ -391,8 +410,17 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
 
       var state = {
         initData: "",
-        selectedTelegramId: null
+        selectedTelegramId: null,
+        userFilter: "paid"
       };
+
+      var USER_FILTERS = [
+        { value: "paid", label: "PRO" },
+        { value: "free", label: "Free" },
+        { value: "trial", label: "Trial" },
+        { value: "none", label: "Без доступа" },
+        { value: "all", label: "Все" }
+      ];
 
       function byId(id) {
         return document.getElementById(id);
@@ -506,8 +534,12 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         return formatOneDecimal(gb / 1024) + " TB";
       }
 
-      function formatTrafficPair(usedMb, limitMb) {
+      function formatTrafficPair(usedMb, limitMb, accessType) {
         var used = formatTrafficMb(usedMb);
+        if (String(accessType || "").trim().toLowerCase() === "paid") {
+          return used + " / Без лимита";
+        }
+
         var limit = Number(limitMb);
         if (Number.isFinite(limit) && limit > 0) {
           return used + " / " + formatTrafficMb(limit);
@@ -682,10 +714,26 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         addCard(cards, "Пользователи", stats.users && stats.users.total, "");
         addCard(cards, "Активные", stats.users && stats.users.active, "");
         addCard(cards, "PRO", stats.users && stats.users.paid, "истекло " + text(stats.users && stats.users.expired_paid));
-        addCard(cards, "Free", stats.users && stats.users.free, "");
-        addCard(cards, "Trial", stats.users && stats.users.trial, "");
         addCard(cards, "Использовано", formatTrafficMb(stats.traffic && stats.traffic.total_used_mb), "");
         addCard(cards, "Обновлено", formatDate(stats.generated_at), "");
+        addCard(cards, "Free", stats.users && stats.users.free, "вторично");
+      }
+
+      function renderUserFilters() {
+        var target = byId("userFilters");
+        clear(target);
+
+        USER_FILTERS.forEach(function (filter) {
+          var button = node("button", "filter-button" + (state.userFilter === filter.value ? " active" : ""), filter.label);
+          button.type = "button";
+          button.addEventListener("click", function () {
+            state.userFilter = filter.value;
+            byId("userSearchInput").value = "";
+            renderUserFilters();
+            loadUsers("");
+          });
+          target.appendChild(button);
+        });
       }
 
       function renderUsers(payload) {
@@ -716,7 +764,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
           row.appendChild(node("td", "", accessLabel(user.access_type)));
           row.appendChild(node("td", user.is_active ? "status-ok" : "status-bad", yesNo(Boolean(user.is_active))));
           row.appendChild(node("td", "", formatDate(user.subscription_expiry)));
-          row.appendChild(node("td", "", formatTrafficPair(user.traffic_used, user.traffic_limit)));
+          row.appendChild(node("td", "", formatTrafficPair(user.traffic_used, user.traffic_limit, user.access_type)));
           row.appendChild(node("td", "", user.active_access_row_count));
           row.appendChild(node("td", "", eventSummary(user.last_event)));
 
@@ -751,7 +799,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
           addKv(card, "Тариф", accessLabel(user.access_type));
           addKv(card, "Активен", yesNo(Boolean(user.is_active)));
           addKv(card, "До", formatDate(user.subscription_expiry));
-          addKv(card, "Трафик", formatTrafficPair(user.traffic_used, user.traffic_limit));
+          addKv(card, "Трафик", formatTrafficPair(user.traffic_used, user.traffic_limit, user.access_type));
           addKv(card, "Конфиги", user.active_access_row_count);
           addKv(card, "Последнее событие", eventSummary(user.last_event));
           cards.appendChild(card);
@@ -771,7 +819,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         addKv(profile, "Тариф", accessLabel(user.access_type));
         addKv(profile, "Активен", activeLabel(Boolean(user.is_active)));
         addKv(profile, "Подписка до", formatDate(user.subscription_expiry));
-        addKv(profile, "Трафик", formatTrafficPair(user.traffic_used, user.traffic_limit));
+        addKv(profile, "Трафик", formatTrafficPair(user.traffic_used, user.traffic_limit, user.access_type));
         addKv(profile, "Лимит устройств", user.device_limit);
         addKv(profile, "Создан", formatDate(user.created_at));
         target.appendChild(profile);
@@ -894,8 +942,11 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       async function loadUsers(query) {
         var params = new URLSearchParams();
         params.set("limit", "50");
+        params.set("sort", "traffic_desc");
         if (query) {
           params.set("q", query);
+        } else if (state.userFilter !== "all") {
+          params.set("access_type", state.userFilter);
         }
         renderUsers(await api("/users?" + params.toString()));
       }
@@ -917,15 +968,14 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
 
           var results = await Promise.all([
             api("/stats"),
-            api("/users?limit=50"),
             api("/traffic/summary"),
             api("/servers")
           ]);
 
           renderStats(results[0]);
-          renderUsers(results[1]);
-          renderTraffic(results[2]);
-          renderServers(results[3]);
+          renderTraffic(results[1]);
+          renderServers(results[2]);
+          await loadUsers(byId("userSearchInput").value.trim());
 
           if (state.selectedTelegramId) {
             await selectUser(state.selectedTelegramId);
@@ -937,6 +987,10 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         } finally {
           byId("refreshButton").disabled = false;
         }
+      }
+
+      function initializeUsersPanel() {
+        renderUserFilters();
       }
 
       byId("refreshButton").addEventListener("click", function () {
@@ -952,6 +1006,8 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         event.preventDefault();
         loadUsers(byId("userSearchInput").value.trim());
       });
+
+      initializeUsersPanel();
 
       state.initData = getTelegramInitData();
       byId("devAuthFallback").open = !state.initData;
@@ -1088,6 +1144,7 @@ async def admin_users_handler(request: web.Request) -> web.Response:
         offset=_parse_int_query(request, "offset", default=0, minimum=0, maximum=10000),
         access_type=request.query.get("access_type"),
         query=request.query.get("q"),
+        sort=request.query.get("sort"),
     )
     return web.json_response(payload)
 
