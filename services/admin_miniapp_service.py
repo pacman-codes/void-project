@@ -247,11 +247,12 @@ async def get_admin_users(
     offset: int = 0,
     access_type: str | None = None,
     query: str | None = None,
+    sort: str | None = None,
 ) -> dict[str, Any]:
     safe_limit = _safe_limit(limit, DEFAULT_USERS_LIMIT, MAX_USERS_LIMIT)
     safe_offset = max(0, min(offset, 10000))
 
-    stmt = select(User).order_by(User.id.desc()).limit(safe_limit).offset(safe_offset)
+    stmt = select(User)
 
     if access_type == "none":
         stmt = stmt.where(or_(User.access_type.is_(None), User.access_type == ""))
@@ -264,6 +265,13 @@ async def get_admin_users(
             stmt = stmt.where(User.telegram_id == int(clean_query))
         else:
             stmt = stmt.where(User.username.ilike(f"%{clean_query.lstrip('@')}%"))
+
+    if sort == "traffic_desc":
+        stmt = stmt.order_by(func.coalesce(User.traffic_used, 0).desc(), User.id.desc())
+    else:
+        stmt = stmt.order_by(User.id.desc())
+
+    stmt = stmt.limit(safe_limit).offset(safe_offset)
 
     async with async_session_maker() as session:
         result = await session.execute(stmt)
