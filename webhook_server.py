@@ -155,7 +155,8 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
     .banner.error { border-color: #7a2f3b; color: var(--danger); }
     .banner.warn { border-color: #74613a; color: var(--warn); }
 
-    .cards {
+    .cards,
+    .summary-cards {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
@@ -180,7 +181,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       margin-top: 3px;
       font-size: 19px;
       font-weight: 650;
-      word-break: break-word;
+      overflow-wrap: break-word;
     }
 
     .card .hint {
@@ -188,7 +189,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       margin-top: 2px;
       color: var(--muted);
       font-size: 12px;
-      word-break: break-word;
+      overflow-wrap: break-word;
     }
 
     .form-row {
@@ -225,7 +226,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
     table {
       width: 100%;
       border-collapse: collapse;
-      min-width: 820px;
+      min-width: 760px;
     }
 
     th, td {
@@ -263,12 +264,12 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
 
     .user-card-title strong {
       min-width: 0;
-      overflow-wrap: anywhere;
+      overflow-wrap: break-word;
     }
 
     .kv {
       display: grid;
-      grid-template-columns: minmax(110px, 0.42fr) 1fr;
+      grid-template-columns: 150px minmax(0, 1fr);
       gap: 8px;
       padding: 6px 0;
       border-bottom: 1px solid rgba(38, 51, 65, 0.65);
@@ -276,7 +277,7 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
 
     .kv:last-child { border-bottom: 0; }
     .kv .key { color: var(--muted); }
-    .kv .val { min-width: 0; overflow-wrap: anywhere; }
+    .kv .val { min-width: 0; overflow-wrap: break-word; }
 
     .stack {
       display: grid;
@@ -288,6 +289,45 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       border-radius: 7px;
       padding: 9px;
       background: var(--panel-soft);
+    }
+
+    .compact-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .config-grid {
+      display: grid;
+      gap: 8px;
+    }
+
+    .event-header {
+      display: grid;
+      grid-template-columns: minmax(140px, 0.9fr) minmax(110px, 0.8fr) minmax(70px, 0.45fr);
+      gap: 8px;
+      align-items: start;
+    }
+
+    .event-field {
+      min-width: 0;
+    }
+
+    .event-field .label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .event-field .value {
+      display: block;
+      margin-top: 2px;
+      overflow-wrap: break-word;
+    }
+
+    .event-message {
+      margin-top: 8px;
+      color: var(--text);
+      overflow-wrap: break-word;
     }
 
     pre {
@@ -316,8 +356,13 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         grid-template-columns: 1.1fr 0.9fr;
       }
 
-      .cards {
+      .cards,
+      .summary-cards {
         grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .config-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
     }
 
@@ -329,6 +374,15 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       .users-cards {
         display: grid;
         gap: 8px;
+      }
+
+      .kv {
+        grid-template-columns: 1fr;
+        gap: 2px;
+      }
+
+      .event-header {
+        grid-template-columns: 1fr;
       }
     }
   </style>
@@ -364,24 +418,22 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
       <div id="statsCards" class="cards"></div>
     </section>
 
-    <section class="grid two">
-      <section class="panel">
-        <h2>Пользователи</h2>
-        <div id="userFilters" class="filters"></div>
-        <form id="userSearchForm" class="form-row">
-          <input id="userSearchInput" type="search" placeholder="Telegram ID или username" autocomplete="off">
-          <button type="submit">Найти</button>
-        </form>
-        <p class="muted">Без поиска применяется выбранный фильтр. Поиск ищет по всем пользователям.</p>
-        <div id="usersTable"></div>
-      </section>
+    <section class="panel">
+      <h2>Пользователи</h2>
+      <div id="userFilters" class="filters"></div>
+      <form id="userSearchForm" class="form-row">
+        <input id="userSearchInput" type="search" placeholder="Telegram ID или username" autocomplete="off">
+        <button type="submit">Найти</button>
+      </form>
+      <p class="muted">Без поиска применяется выбранный фильтр. Поиск ищет по всем пользователям.</p>
+      <div id="usersTable"></div>
+    </section>
 
-      <section class="panel">
-        <h2>Пользователь</h2>
-        <div id="userDetail" class="stack">
-          <p class="muted">Выберите пользователя из списка.</p>
-        </div>
-      </section>
+    <section class="panel">
+      <h2>Пользователь</h2>
+      <div id="userDetail" class="stack">
+        <p class="muted">Выберите пользователя из списка.</p>
+      </div>
     </section>
 
     <section class="grid two">
@@ -591,6 +643,13 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
           card.appendChild(node("span", "hint", hint));
         }
         parent.appendChild(card);
+      }
+
+      function addEventField(parent, label, value) {
+        var field = node("div", "event-field");
+        field.appendChild(node("span", "label", label));
+        field.appendChild(node("span", "value", value));
+        parent.appendChild(field);
       }
 
       function getInitDataFromUrl() {
@@ -812,22 +871,22 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
         clear(target);
 
         var user = detail.user || {};
-        var profile = node("div", "stack");
-        addKv(profile, "Telegram ID", user.telegram_id);
-        addKv(profile, "Username", user.username);
-        addKv(profile, "Имя", [user.first_name, user.last_name].filter(Boolean).join(" "));
-        addKv(profile, "Тариф", accessLabel(user.access_type));
-        addKv(profile, "Активен", activeLabel(Boolean(user.is_active)));
-        addKv(profile, "Подписка до", formatDate(user.subscription_expiry));
-        addKv(profile, "Трафик", formatTrafficPair(user.traffic_used, user.traffic_limit, user.access_type));
-        addKv(profile, "Лимит устройств", user.device_limit);
-        addKv(profile, "Создан", formatDate(user.created_at));
-        target.appendChild(profile);
+        var activeAccesses = detail.active_accesses || [];
+        var summary = node("div", "summary-cards");
+        addCard(summary, "Telegram ID", user.telegram_id, "");
+        addCard(summary, "Username", user.username, "");
+        addCard(summary, "Тариф", accessLabel(user.access_type), "");
+        addCard(summary, "Статус", activeLabel(Boolean(user.is_active)), "");
+        addCard(summary, "Подписка до", formatDate(user.subscription_expiry), "");
+        addCard(summary, "Трафик", formatTrafficPair(user.traffic_used, user.traffic_limit, user.access_type), "");
+        addCard(summary, "Конфиги", activeAccesses.length, "");
+        addCard(summary, "Лимит устройств", user.device_limit, "");
+        target.appendChild(summary);
 
         var accessTitle = node("h2", "", "Активные конфиги");
         target.appendChild(accessTitle);
-        var accessList = node("div", "stack");
-        (detail.active_accesses || []).forEach(function (access) {
+        var accessList = node("div", "config-grid");
+        activeAccesses.forEach(function (access) {
           var item = node("div", "list-item");
           addKv(item, "Сервер", access.server_name);
           addKv(item, "Устройство", access.device_name);
@@ -838,20 +897,6 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
           accessList.appendChild(node("p", "muted", "Активных конфигов нет."));
         }
         target.appendChild(accessList);
-
-        var linksTitle = node("h2", "", "Подписочные ссылки");
-        target.appendChild(linksTitle);
-        var linksBlock = node("div", "stack");
-        addKv(linksBlock, "Есть", yesNo(Boolean(detail.subscription_links && detail.subscription_links.exists)));
-        addKv(linksBlock, "Активных", detail.subscription_links && detail.subscription_links.active_count);
-        (detail.subscription_links && detail.subscription_links.items || []).forEach(function (link) {
-          var item = node("div", "list-item");
-          addKv(item, "Активна", yesNo(Boolean(link.is_active)));
-          addKv(item, "Токен", link.token_masked);
-          addKv(item, "Последнее использование", formatDate(link.last_used_at));
-          linksBlock.appendChild(item);
-        });
-        target.appendChild(linksBlock);
       }
 
       function renderEvents(payload) {
@@ -866,16 +911,20 @@ ADMIN_MINIAPP_HTML = """<!doctype html>
 
         events.forEach(function (event) {
           var item = node("div", "list-item");
-          addKv(item, "Дата", formatDate(event.created_at));
-          addKv(item, "Событие", event.event_type);
-          addKv(item, "Статус", event.status);
-          addKv(item, "Источник", event.source);
-          addKv(item, "Actor", event.actor_telegram_id);
-          addKv(item, "Сообщение", event.message);
+          var header = node("div", "event-header");
+          addEventField(header, "Дата", formatDate(event.created_at));
+          addEventField(header, "Событие", event.event_type);
+          addEventField(header, "Статус", event.status);
+          addEventField(header, "Источник", event.source);
+          item.appendChild(header);
+          item.appendChild(node("div", "event-message", text(event.message)));
           if (event.details) {
+            var details = document.createElement("details");
+            details.appendChild(node("summary", "", "Debug JSON"));
             var pre = document.createElement("pre");
             pre.textContent = JSON.stringify(event.details, null, 2);
-            item.appendChild(pre);
+            details.appendChild(pre);
+            item.appendChild(details);
           }
           target.appendChild(item);
         });
