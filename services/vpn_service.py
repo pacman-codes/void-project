@@ -657,6 +657,7 @@ class VPNService:
             "germany_1": 101,
             "netherlands_1": 102,
             "swpg_1": 103,
+            "prod_1": 104,
         }
 
         if server_code in fixed:
@@ -694,6 +695,7 @@ class VPNService:
         fixed = {
             "germany_1": 9001,
             "netherlands_1": 9002,
+            "prod_1": 9003,
         }
 
         if server_code in fixed:

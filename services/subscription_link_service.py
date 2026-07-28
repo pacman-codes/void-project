@@ -322,42 +322,86 @@ def _server_sort_key(row: VPNAccess, by_code: dict[str, object], by_endpoint: di
     return (protocol_order, 0, server_name, row.id)
 
 
-def _server_display_name(row: VPNAccess, by_code: dict[str, object], by_endpoint: dict[str, object]) -> str:
-    server_name = row.server_name or ""
-    endpoint = _endpoint_from_config_url(row.config_url)
+def _server_display_name(
+    row: VPNAccess,
+    by_code: dict[str, object],
+    by_endpoint: dict[str, object],
+) -> str:
+    server_name = (
+        row.server_name or ""
+    ).strip()
 
-    config_url = (row.config_url or "").strip()
+    endpoint = _endpoint_from_config_url(
+        row.config_url
+    )
+
+    config_url = (
+        row.config_url or ""
+    ).strip()
+
     try:
-        scheme = urlsplit(config_url).scheme.lower()
+        scheme = urlsplit(
+            config_url
+        ).scheme.lower()
     except Exception:
         scheme = ""
 
+    # HY2 uses the configured *_HY2_NAME.
     if scheme in {"hysteria2", "hy2"}:
-        if endpoint == "gepg.voidmod.space:8443":
-            return "🧬 Резерв"
-        if endpoint == "nlpg-vl.voidmod.space:443":
-            return "🧪 Резерв"
+        device_name = (
+            getattr(
+                row,
+                "device_name",
+                None,
+            )
+            or ""
+        ).strip()
 
-    node = by_code.get(server_name) or by_endpoint.get(endpoint)
-
-    if node is not None:
-        display_name = str(getattr(node, "display_name", "")).strip()
-        if display_name:
-            return display_name
-
-    if server_name in {"cdn_selectel_xhttp", "cdn_selectel_fi", "cdn_selectel_swpg", "cdn_gcore_swpg"}:
-        device_name = (getattr(row, "device_name", None) or "").strip()
         if device_name:
             return device_name
 
-    if server_name and server_name != "main":
-        return server_name.replace("_", "-")
+    node = (
+        by_code.get(server_name)
+        or by_endpoint.get(endpoint)
+    )
+
+    if node is not None:
+        display_name = str(
+            getattr(
+                node,
+                "display_name",
+                "",
+            )
+        ).strip()
+
+        if display_name:
+            return display_name
+
+    device_name = (
+        getattr(
+            row,
+            "device_name",
+            None,
+        )
+        or ""
+    ).strip()
+
+    if device_name:
+        return device_name
+
+    if (
+        server_name
+        and server_name != "main"
+    ):
+        return server_name.replace(
+            "_",
+            "-",
+        )
 
     if endpoint:
         return endpoint
 
     return f"node-{row.id}"
-
 
 def _dedupe_rows_by_server(rows: list[VPNAccess], by_code: dict[str, object], by_endpoint: dict[str, object]) -> list[VPNAccess]:
     selected: list[VPNAccess] = []
@@ -441,38 +485,25 @@ def _is_subscription_output_row_allowed(
     row: VPNAccess,
     by_code: dict[str, object],
 ) -> bool:
-    """Allow only production subscription technical rows.
+    """Allow only enabled registry technical rows.
 
-    This intentionally blocks legacy real-device rows even if they were migrated
-    from server_name='main' to a registry server like germany_1.
-
-    Allowed:
-    - VLESS registry technical rows: device_number 100..8999
-    - HY2 backup technical rows: device_number >= 9000
-
-    Blocked:
-    - legacy main/dev/migration rows
-    - old device slots 1/2
-    - disabled/test/unknown registry nodes
-    - unsupported URL schemes
+    VLESS uses slots 100..8999.
+    Hysteria2 uses slots 9000+.
+    Unknown, disabled and legacy nodes are excluded.
     """
-    server_name = (row.server_name or "").strip()
-    config_url = (row.config_url or "").strip()
-    device_name = (getattr(row, "device_name", None) or "").strip()
+    server_name = (
+        row.server_name or ""
+    ).strip()
 
-    # Manual whitelist/mobile CDN row. Keep this narrow on purpose:
-    # do not allow arbitrary unknown rows into normal subscriptions.
     if (
-        server_name in {"cdn_selectel_xhttp", "cdn_selectel_fi", "cdn_selectel_swpg", "cdn_gcore_swpg"}
-        and device_name in {"мобилка", "FI CDN", "SWPG CDN", "Gcore CDN"}
-        and config_url.startswith(("vless://", "hysteria2://", "hy2://"))
+        not server_name
+        or server_name
+        in LEGACY_SUBSCRIPTION_SERVER_NAMES
     ):
-        return True
-
-    if not server_name or server_name in LEGACY_SUBSCRIPTION_SERVER_NAMES:
         return False
 
     node = by_code.get(server_name)
+
     if node is None:
         return False
 
@@ -483,16 +514,27 @@ def _is_subscription_output_row_allowed(
         return False
 
     scheme = _access_url_scheme(row)
-    device_number = _access_device_number(row)
+    device_number = (
+        _access_device_number(row)
+    )
 
     if scheme == "vless":
-        return VLESS_TECHNICAL_DEVICE_MIN <= device_number < HY2_TECHNICAL_DEVICE_MIN
+        return (
+            VLESS_TECHNICAL_DEVICE_MIN
+            <= device_number
+            < HY2_TECHNICAL_DEVICE_MIN
+        )
 
-    if scheme in {"hysteria2", "hy2"}:
-        return device_number >= HY2_TECHNICAL_DEVICE_MIN
+    if scheme in {
+        "hysteria2",
+        "hy2",
+    }:
+        return (
+            device_number
+            >= HY2_TECHNICAL_DEVICE_MIN
+        )
 
     return False
-
 
 async def _load_subscription_context(token: str) -> tuple[User, list[VPNAccess], dict[str, object], dict[str, object]]:
     async with async_session_maker() as session:
