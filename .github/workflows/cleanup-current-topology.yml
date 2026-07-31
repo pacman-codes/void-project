@@ -1,0 +1,479 @@
+name: Apply current VOID topology cleanup
+
+on:
+  push:
+    branches:
+      - cleanup/current-prod-nl-topology
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Rewrite topology code
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          from pathlib import Path
+
+
+          def read(path: str) -> str:
+              return Path(path).read_text()
+
+
+          def write(path: str, content: str) -> None:
+              Path(path).write_text(content)
+
+
+          def replace_once(source: str, old: str, new: str, label: str) -> str:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, got {count}")
+              return source.replace(old, new, 1)
+
+
+          def replace_class_method(
+              path: str,
+              class_name: str,
+              method_name: str,
+              replacement: str | None,
+          ) -> None:
+              source = read(path)
+              tree = ast.parse(source)
+
+              class_node = next(
+                  (
+                      node
+                      for node in tree.body
+                      if isinstance(node, ast.ClassDef) and node.name == class_name
+                  ),
+                  None,
+              )
+              if class_node is None:
+                  raise SystemExit(f"{path}: class {class_name} not found")
+
+              method = next(
+                  (
+                      node
+                      for node in class_node.body
+                      if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                      and node.name == method_name
+                  ),
+                  None,
+              )
+              if method is None:
+                  raise SystemExit(f"{path}: method {method_name} not found")
+
+              starts = [method.lineno]
+              starts.extend(item.lineno for item in method.decorator_list)
+              start_line = min(starts) - 1
+              end_line = method.end_lineno
+
+              lines = source.splitlines(keepends=True)
+              inserted = "" if replacement is None else replacement.rstrip() + "\n\n"
+              write(path, "".join(lines[:start_line]) + inserted + "".join(lines[end_line:]))
+
+
+          topology = '''from __future__ import annotations
+
+
+CURRENT_SUBSCRIPTION_SERVER_CODES = (
+    "prod_1",
+    "netherlands_1",
+)
+CURRENT_SUBSCRIPTION_SERVER_CODE_SET = frozenset(CURRENT_SUBSCRIPTION_SERVER_CODES)
+
+VLESS_TECHNICAL_DEVICE_NUMBERS = {
+    "prod_1": 104,
+    "netherlands_1": 102,
+}
+HY2_TECHNICAL_DEVICE_NUMBERS = {
+    "prod_1": 9003,
+    "netherlands_1": 9002,
+}
+
+VLESS_TECHNICAL_DEVICE_MIN = 100
+HY2_TECHNICAL_DEVICE_MIN = 9000
+
+
+def get_vless_device_number(server_code: str) -> int:
+    try:
+        return VLESS_TECHNICAL_DEVICE_NUMBERS[server_code]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported subscription server: {server_code}") from exc
+
+
+def get_hy2_device_number(server_code: str) -> int:
+    try:
+        return HY2_TECHNICAL_DEVICE_NUMBERS[server_code]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported subscription server: {server_code}") from exc
+'''
+          write("services/subscription_topology.py", topology)
+
+          vpn_path = "services/vpn_service.py"
+          source = read(vpn_path)
+          source = replace_once(
+              source,
+              "from services.server_registry import get_server_node, load_enabled_server_nodes\n",
+              "from services.server_registry import get_server_node, load_enabled_server_nodes\n"
+              "from services.subscription_topology import (\n"
+              "    CURRENT_SUBSCRIPTION_SERVER_CODES,\n"
+              "    get_hy2_device_number,\n"
+              "    get_vless_device_number,\n"
+              ")\n",
+              "vpn_service topology import",
+          )
+          source = replace_once(
+              source,
+              'MIGRATION_INBOUND_ID = 9\nMIGRATION_SERVER_NAME = "migration-8449"\n',
+              "",
+              "vpn_service migration constants",
+          )
+          write(vpn_path, source)
+
+          replace_class_method(
+              vpn_path,
+              "VPNService",
+              "ensure_migration_8449_access_record",
+              None,
+          )
+
+          replace_class_method(
+              vpn_path,
+              "VPNService",
+              "_subscription_device_number_for_server",
+              '''    @staticmethod
+    def _subscription_device_number_for_server(server_code: str, index: int) -> int:
+        del index
+        return get_vless_device_number(server_code)''',
+          )
+
+          replace_class_method(
+              vpn_path,
+              "VPNService",
+              "_hy2_device_number_for_server",
+              '''    @staticmethod
+    def _hy2_device_number_for_server(server_code: str, index: int) -> int:
+        del index
+        return get_hy2_device_number(server_code)''',
+          )
+
+          replace_class_method(
+              vpn_path,
+              "VPNService",
+              "ensure_subscription_access_records",
+              '''    async def ensure_subscription_access_records(self, telegram_id: int) -> dict:
+        """Provision the current two-node topology: PROD and Netherlands.
+
+        Each physical node contributes one VLESS/Reality connection and one HY2
+        connection. Other registry entries are intentionally ignored.
+        """
+        enabled_by_code = {
+            node.code: node
+            for node in load_enabled_server_nodes()
+            if (node.protocol or "").lower() == "vless"
+            and node.code in CURRENT_SUBSCRIPTION_SERVER_CODES
+        }
+
+        missing_codes = [
+            code
+            for code in CURRENT_SUBSCRIPTION_SERVER_CODES
+            if code not in enabled_by_code
+        ]
+        if missing_codes:
+            raise VPNServiceError(
+                "Current subscription node(s) missing or disabled in registry: "
+                + ", ".join(missing_codes)
+            )
+
+        nodes = [enabled_by_code[code] for code in CURRENT_SUBSCRIPTION_SERVER_CODES]
+        provisioned_count = 0
+        errors: list[str] = []
+        results: list[dict] = []
+
+        for index, node in enumerate(nodes, start=1):
+            try:
+                result = await self.ensure_registry_server_access_record(
+                    telegram_id=telegram_id,
+                    server_name=node.code,
+                    db_device_number=self._subscription_device_number_for_server(node.code, index),
+                    device_name=node.display_name,
+                    email_suffix=node.code,
+                )
+                provisioned_count += 1
+                results.append(result)
+            except Exception as exc:
+                errors.append(f"{node.code}: {type(exc).__name__}: {exc}")
+
+        for index, node in enumerate(nodes, start=1):
+            try:
+                result = await self.ensure_hy2_subscription_access_record(
+                    telegram_id=telegram_id,
+                    server_name=node.code,
+                    db_device_number=self._hy2_device_number_for_server(node.code, index),
+                    device_name=node.display_name,
+                )
+
+                if result.get("skipped"):
+                    continue
+
+                provisioned_count += 1
+                results.append(result)
+            except Exception as exc:
+                errors.append(f"{node.code}/hy2: {type(exc).__name__}: {exc}")
+
+        return {
+            "total": len(CURRENT_SUBSCRIPTION_SERVER_CODES) * 2,
+            "provisioned_count": provisioned_count,
+            "errors": errors,
+            "results": results,
+        }''',
+          )
+
+          subscription_path = "services/subscription_link_service.py"
+          source = read(subscription_path)
+          source = replace_once(
+              source,
+              "from db.models import User, UserSubscriptionLink, VPNAccess\n",
+              "from db.models import User, UserSubscriptionLink, VPNAccess\n"
+              "from services.subscription_topology import (\n"
+              "    CURRENT_SUBSCRIPTION_SERVER_CODE_SET,\n"
+              "    HY2_TECHNICAL_DEVICE_MIN,\n"
+              "    VLESS_TECHNICAL_DEVICE_MIN,\n"
+              ")\n",
+              "subscription topology import",
+          )
+          source = replace_once(
+              source,
+              'LEGACY_SUBSCRIPTION_SERVER_NAMES = {"main", "dev", "migration-8449"}\n'
+              'VLESS_TECHNICAL_DEVICE_MIN = 100\n'
+              'HY2_TECHNICAL_DEVICE_MIN = 9000\n\n',
+              "",
+              "subscription local topology constants",
+          )
+          source = replace_once(
+              source,
+              '''    if (
+        not server_name
+        or server_name
+        in LEGACY_SUBSCRIPTION_SERVER_NAMES
+    ):
+        return False
+''',
+              '''    if server_name not in CURRENT_SUBSCRIPTION_SERVER_CODE_SET:
+        return False
+''',
+              "subscription current server guard",
+          )
+          source = source.replace(
+              '"""Allow only enabled registry technical rows.',
+              '"""Allow only current enabled topology rows.',
+              1,
+          )
+          write(subscription_path, source)
+
+          traffic_path = "services/traffic_service.py"
+          source = read(traffic_path)
+          source = replace_once(
+              source,
+              "from services.server_registry import get_server_node, load_panel_credentials\n",
+              "from services.server_registry import get_server_node, load_panel_credentials\n"
+              "from services.subscription_topology import (\n"
+              "    CURRENT_SUBSCRIPTION_SERVER_CODE_SET,\n"
+              "    HY2_TECHNICAL_DEVICE_MIN,\n"
+              "    VLESS_TECHNICAL_DEVICE_MIN,\n"
+              ")\n",
+              "traffic topology import",
+          )
+          source = replace_once(
+              source,
+              'TRAFFIC_LEGACY_SERVER_NAMES = {"main", "dev", "migration-8449"}\n'
+              'TRAFFIC_VLESS_TECHNICAL_DEVICE_MIN = 100\n'
+              'TRAFFIC_HY2_TECHNICAL_DEVICE_MIN = 9000\n\n',
+              "",
+              "traffic local topology constants",
+          )
+          source = replace_once(
+              source,
+              '''    if not server_name:
+        return "missing server_name"
+
+    if server_name in TRAFFIC_LEGACY_SERVER_NAMES:
+        return f"legacy server_name={server_name}"
+''',
+              '''    if server_name not in CURRENT_SUBSCRIPTION_SERVER_CODE_SET:
+        return f"non-current server_name={server_name or '-'}"
+''',
+              "traffic current server guard",
+          )
+          source = source.replace(
+              "TRAFFIC_VLESS_TECHNICAL_DEVICE_MIN",
+              "VLESS_TECHNICAL_DEVICE_MIN",
+          )
+          source = source.replace(
+              "TRAFFIC_HY2_TECHNICAL_DEVICE_MIN",
+              "HY2_TECHNICAL_DEVICE_MIN",
+          )
+          write(traffic_path, source)
+
+          audit_path = "scripts/audit_subscription_integrity.py"
+          source = read(audit_path)
+          source = replace_once(
+              source,
+              "from services.server_registry import load_server_nodes\n",
+              "from services.server_registry import load_server_nodes\n"
+              "from services.subscription_topology import (\n"
+              "    CURRENT_SUBSCRIPTION_SERVER_CODE_SET,\n"
+              "    HY2_TECHNICAL_DEVICE_MIN,\n"
+              "    VLESS_TECHNICAL_DEVICE_MIN,\n"
+              ")\n",
+              "audit topology import",
+          )
+          source = replace_once(
+              source,
+              'LEGACY_SERVER_NAMES = {"main", "dev", "migration-8449"}\n'
+              'VLESS_TECHNICAL_DEVICE_MIN = 100\n'
+              'HY2_TECHNICAL_DEVICE_MIN = 9000\n\n',
+              "",
+              "audit local topology constants",
+          )
+          source = replace_once(
+              source,
+              '''    enabled_vless_codes = {
+        node.code
+        for node in nodes
+        if node.enabled and (node.protocol or "").lower() == "vless"
+    }
+''',
+              '''    enabled_vless_codes = {
+        node.code
+        for node in nodes
+        if node.enabled
+        and (node.protocol or "").lower() == "vless"
+        and node.code in CURRENT_SUBSCRIPTION_SERVER_CODE_SET
+    }
+''',
+              "audit current enabled codes",
+          )
+          source = source.replace(
+              "    legacy_rows: list[str] = []\n",
+              "    non_current_rows: list[str] = []\n",
+              1,
+          )
+          source = replace_once(
+              source,
+              '''        if server_name in LEGACY_SERVER_NAMES:
+            legacy_rows.append(_format_access(access, user))
+''',
+              '''        if server_name not in CURRENT_SUBSCRIPTION_SERVER_CODE_SET:
+            non_current_rows.append(_format_access(access, user))
+''',
+              "audit non-current rows",
+          )
+          source = replace_once(
+              source,
+              '''        if server_name and server_name not in registry.all_codes and server_name not in LEGACY_SERVER_NAMES:
+            unknown_rows.append(_format_access(access, user))
+''',
+              '''        if server_name and server_name not in registry.all_codes:
+            unknown_rows.append(_format_access(access, user))
+''',
+              "audit unknown rows",
+          )
+          source = replace_once(
+              source,
+              '    checks.append(("ACTIVE LEGACY SERVER ROWS", legacy_rows))\n',
+              '    checks.append(("ACTIVE NON-CURRENT SERVER ROWS", non_current_rows))\n',
+              "audit result label",
+          )
+          write(audit_path, source)
+
+          bootstrap_path = "scripts/bootstrap_node_from_prod.sh"
+          source = read(bootstrap_path)
+          source = source.replace("swpg.voidmod.space", "node1.voidmod.space")
+          source = source.replace("swpg_1", "node_1")
+          source = source.replace("swpg1", "node1")
+          write(bootstrap_path, source)
+
+          obsolete = ("germany_1", "swpg_1", "migration-8449", "MIGRATION_INBOUND_ID")
+          checked_paths = (
+              vpn_path,
+              subscription_path,
+              traffic_path,
+              audit_path,
+              bootstrap_path,
+              "services/subscription_topology.py",
+          )
+          for path in checked_paths:
+              content = read(path)
+              found = [item for item in obsolete if item in content]
+              if found:
+                  raise SystemExit(f"{path}: obsolete references remain: {found}")
+          PY
+
+      - name: Remove one-off workflow
+        run: rm -f .github/workflows/cleanup-current-topology.yml
+
+      - name: Validate cleanup
+        shell: bash
+        run: |
+          python -m py_compile \
+            services/subscription_topology.py \
+            services/vpn_service.py \
+            services/subscription_link_service.py \
+            services/traffic_service.py \
+            scripts/audit_subscription_integrity.py
+
+          python - <<'PY'
+          from services.subscription_topology import (
+              CURRENT_SUBSCRIPTION_SERVER_CODES,
+              HY2_TECHNICAL_DEVICE_NUMBERS,
+              VLESS_TECHNICAL_DEVICE_NUMBERS,
+          )
+
+          assert CURRENT_SUBSCRIPTION_SERVER_CODES == ("prod_1", "netherlands_1")
+          assert VLESS_TECHNICAL_DEVICE_NUMBERS == {
+              "prod_1": 104,
+              "netherlands_1": 102,
+          }
+          assert HY2_TECHNICAL_DEVICE_NUMBERS == {
+              "prod_1": 9003,
+              "netherlands_1": 9002,
+          }
+          print("topology constants ok")
+          PY
+
+          ! grep -RInE \
+            'germany_1|swpg_1|migration-8449|MIGRATION_INBOUND_ID' \
+            services/vpn_service.py \
+            services/subscription_link_service.py \
+            services/traffic_service.py \
+            scripts/audit_subscription_integrity.py \
+            scripts/bootstrap_node_from_prod.sh \
+            services/subscription_topology.py
+
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Refactor subscription topology to PROD and Netherlands"
+          git push origin HEAD:${GITHUB_REF_NAME}
