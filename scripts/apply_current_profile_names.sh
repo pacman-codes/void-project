@@ -44,16 +44,16 @@ apply_changes = os.environ["MODE"] == "--apply"
 
 vless_names = {
     "netherlands_1": "🇳🇱Нидерланды 1",
-    "prod_1": "🇳🇱Быстрый 1",
+    "prod_1": "🇳🇱Нидерланды 2",
 }
 hy2_names = {
-    "netherlands_1": "🇳🇱Нидерланды 2",
+    "netherlands_1": "🇳🇱Быстрый 1",
     "prod_1": "🇳🇱Быстрый 2",
 }
 slot_names = {
     ("netherlands_1", 102): "🇳🇱Нидерланды 1",
-    ("netherlands_1", 9002): "🇳🇱Нидерланды 2",
-    ("prod_1", 104): "🇳🇱Быстрый 1",
+    ("prod_1", 104): "🇳🇱Нидерланды 2",
+    ("netherlands_1", 9002): "🇳🇱Быстрый 1",
     ("prod_1", 9003): "🇳🇱Быстрый 2",
 }
 
