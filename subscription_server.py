@@ -45,7 +45,6 @@ REDIRECT_ENDPOINTS = {
     "happ-auto-import",
 }
 ALLOWED_ENDPOINTS = TEXT_ENDPOINTS | JSON_ENDPOINTS | REDIRECT_ENDPOINTS
-UNVERIFIED_PUBLIC_SCHEMES = ("hysteria2://", "hy2://")
 
 _loop = asyncio.new_event_loop()
 
@@ -62,16 +61,6 @@ _loop_thread.start()
 def run_async(coro):
     future = asyncio.run_coroutine_threadsafe(coro, _loop)
     return future.result(timeout=REQUEST_TIMEOUT_SECONDS)
-
-
-def _hide_unverified_public_profiles(body: str) -> str:
-    """Keep known-broken experimental transports out of the public subscription."""
-    lines = [
-        line
-        for line in body.splitlines()
-        if not line.strip().lower().startswith(UNVERIFIED_PUBLIC_SCHEMES)
-    ]
-    return "\n".join(lines).rstrip() + "\n"
 
 
 class SubscriptionHandler(BaseHTTPRequestHandler):
@@ -133,7 +122,6 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
                 return
 
             body = run_async(build_subscription_by_token(token))
-            body = _hide_unverified_public_profiles(body)
         except SubscriptionLinkError as exc:
             self._send_text(403, f"{exc}\n", head_only=head_only)
             return
