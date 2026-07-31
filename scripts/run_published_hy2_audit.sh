@@ -161,7 +161,7 @@ def main() -> int:
 
         if not test_endpoint(
             binary=binary,
-            code=f"{code}/published",
+            code=f"{code}-published",
             host=host,
             port=port,
             auth=auth,
