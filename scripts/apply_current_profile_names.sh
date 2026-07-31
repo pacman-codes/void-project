@@ -24,6 +24,7 @@ export REGISTRY_PATH SECRETS_PATH MODE
 "${PYTHON_BIN}" - <<'PY'
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -31,6 +32,11 @@ import stat
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+from sqlalchemy import select, update
+
+from db.database import async_session_maker
+from db.models import VPNAccess
 
 registry_path = Path(os.environ["REGISTRY_PATH"])
 secrets_path = Path(os.environ["SECRETS_PATH"])
@@ -43,6 +49,12 @@ vless_names = {
 hy2_names = {
     "netherlands_1": "🇳🇱Нидерланды 2",
     "prod_1": "🇳🇱Быстрый 2",
+}
+slot_names = {
+    ("netherlands_1", 102): "🇳🇱Нидерланды 1",
+    ("netherlands_1", 9002): "🇳🇱Нидерланды 2",
+    ("prod_1", 104): "🇳🇱Быстрый 1",
+    ("prod_1", 9003): "🇳🇱Быстрый 2",
 }
 
 registry = json.loads(registry_path.read_text())
@@ -75,7 +87,7 @@ for code, name in vless_names.items():
     secret_name_updates[f"{secret_ref}_HY2_NAME"] = hy2_names[code]
 
 if not apply_changes:
-    print("CHECK ONLY: no files changed")
+    print("CHECK ONLY: no files or DB rows changed")
     raise SystemExit(0)
 
 stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -131,70 +143,61 @@ if remaining:
 
 atomic_write(secrets_path, "\n".join(updated_lines).rstrip() + "\n", secrets_stat)
 
+
+async def update_and_verify_rows() -> None:
+    async with async_session_maker() as session:
+        for (server_name, device_number), device_name in slot_names.items():
+            result = await session.execute(
+                update(VPNAccess)
+                .where(
+                    VPNAccess.server_name == server_name,
+                    VPNAccess.device_number == device_number,
+                )
+                .values(device_name=device_name)
+            )
+            print(
+                f"DB {server_name}/{device_number}: "
+                f"updated_rows={int(result.rowcount or 0)} name={device_name!r}"
+            )
+
+        await session.commit()
+
+        result = await session.execute(
+            select(
+                VPNAccess.server_name,
+                VPNAccess.device_number,
+                VPNAccess.device_name,
+            )
+            .where(
+                VPNAccess.server_name.in_({"netherlands_1", "prod_1"}),
+                VPNAccess.device_number.in_({102, 104, 9002, 9003}),
+            )
+            .order_by(VPNAccess.server_name, VPNAccess.device_number)
+        )
+        rows = result.all()
+
+    observed = {
+        (str(server_name), int(device_number)): str(device_name or "")
+        for server_name, device_number, device_name in rows
+    }
+
+    for key, expected_name in slot_names.items():
+        matching = [
+            name
+            for observed_key, name in observed.items()
+            if observed_key == key
+        ]
+        if matching and any(name != expected_name for name in matching):
+            raise SystemExit(
+                f"ERROR: wrong DB name for {key[0]}/{key[1]}: {matching!r}"
+            )
+
+    print("DB profile names verified")
+
+
+asyncio.run(update_and_verify_rows())
+
 print(f"registry backup: {registry_backup}")
 print(f"secrets backup: {secrets_backup}")
-print("PROFILE NAME FILE UPDATE OK")
+print("PROFILE NAME APPLY OK")
 PY
-
-if [[ "${MODE}" == "check" ]]; then
-  exit 0
-fi
-
-echo "== update existing technical row names =="
-db <<'SQL'
-BEGIN;
-
-UPDATE vpn_accesses
-SET device_name = '🇳🇱Нидерланды 1'
-WHERE server_name = 'netherlands_1'
-  AND device_number = 102
-  AND device_name IS DISTINCT FROM '🇳🇱Нидерланды 1';
-
-UPDATE vpn_accesses
-SET device_name = '🇳🇱Нидерланды 2'
-WHERE server_name = 'netherlands_1'
-  AND device_number = 9002
-  AND device_name IS DISTINCT FROM '🇳🇱Нидерланды 2';
-
-UPDATE vpn_accesses
-SET device_name = '🇳🇱Быстрый 1'
-WHERE server_name = 'prod_1'
-  AND device_number = 104
-  AND device_name IS DISTINCT FROM '🇳🇱Быстрый 1';
-
-UPDATE vpn_accesses
-SET device_name = '🇳🇱Быстрый 2'
-WHERE server_name = 'prod_1'
-  AND device_number = 9003
-  AND device_name IS DISTINCT FROM '🇳🇱Быстрый 2';
-
-COMMIT;
-SQL
-
-echo "== verify names =="
-"${PYTHON_BIN}" - <<'PY'
-from services.server_registry import get_server_node
-
-assert get_server_node("netherlands_1").display_name == "🇳🇱Нидерланды 1"
-assert get_server_node("prod_1").display_name == "🇳🇱Быстрый 1"
-print("registry profile names OK")
-PY
-
-db <<'SQL'
-SELECT
-    server_name,
-    device_number,
-    device_name,
-    COUNT(*) AS rows
-FROM vpn_accesses
-WHERE (server_name, device_number) IN (
-    ('netherlands_1', 102),
-    ('netherlands_1', 9002),
-    ('prod_1', 104),
-    ('prod_1', 9003)
-)
-GROUP BY server_name, device_number, device_name
-ORDER BY server_name, device_number;
-SQL
-
-echo "PROFILE NAME APPLY OK"
