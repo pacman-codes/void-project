@@ -1,0 +1,97 @@
+name: Run current VOID topology cleanup in PR
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Execute embedded cleanup script
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          workflow = Path('.github/workflows/cleanup-current-topology.yml').read_text()
+          start_marker = "          python - <<'PY'\n"
+          end_marker = "          PY\n\n      - name: Remove one-off workflow"
+
+          if start_marker not in workflow or end_marker not in workflow:
+              raise SystemExit('embedded cleanup script markers not found')
+
+          body = workflow.split(start_marker, 1)[1].split(end_marker, 1)[0]
+          script = dedent(body)
+          exec(compile(script, '<cleanup-current-topology>', 'exec'))
+          PY
+
+      - name: Remove one-off files
+        run: |
+          rm -f \
+            .github/workflows/cleanup-current-topology.yml \
+            .github/workflows/cleanup-current-topology-pr.yml
+
+      - name: Validate cleanup
+        shell: bash
+        run: |
+          python -m py_compile \
+            services/subscription_topology.py \
+            services/vpn_service.py \
+            services/subscription_link_service.py \
+            services/traffic_service.py \
+            scripts/audit_subscription_integrity.py
+
+          python - <<'PY'
+          from services.subscription_topology import (
+              CURRENT_SUBSCRIPTION_SERVER_CODES,
+              HY2_TECHNICAL_DEVICE_NUMBERS,
+              VLESS_TECHNICAL_DEVICE_NUMBERS,
+          )
+
+          assert CURRENT_SUBSCRIPTION_SERVER_CODES == ('prod_1', 'netherlands_1')
+          assert VLESS_TECHNICAL_DEVICE_NUMBERS == {
+              'prod_1': 104,
+              'netherlands_1': 102,
+          }
+          assert HY2_TECHNICAL_DEVICE_NUMBERS == {
+              'prod_1': 9003,
+              'netherlands_1': 9002,
+          }
+          print('topology constants ok')
+          PY
+
+          ! grep -RInE \
+            'germany_1|swpg_1|migration-8449|MIGRATION_INBOUND_ID' \
+            services/vpn_service.py \
+            services/subscription_link_service.py \
+            services/traffic_service.py \
+            scripts/audit_subscription_integrity.py \
+            scripts/bootstrap_node_from_prod.sh \
+            services/subscription_topology.py
+
+      - name: Commit cleanup to PR branch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Refactor subscription topology to PROD and Netherlands'
+          git push origin HEAD:${{ github.head_ref }}
