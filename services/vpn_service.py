@@ -9,13 +9,16 @@ from db.database import async_session_maker
 from db.models import User, VPNAccess
 from services.panel_client import PanelClient
 from services.server_registry import get_server_node, load_enabled_server_nodes
+from services.subscription_topology import (
+    CURRENT_SUBSCRIPTION_SERVER_CODES,
+    get_hy2_device_number,
+    get_vless_device_number,
+)
 
 from config.runtime import DEV_MODE, PANEL_ENABLED
 
 
 MAIN_INBOUND_ID = 8  # fallback; PANEL_INBOUND_ID env override is used by VPNService
-MIGRATION_INBOUND_ID = 9
-MIGRATION_SERVER_NAME = "migration-8449"
 
 
 class VPNServiceError(Exception):
@@ -463,91 +466,6 @@ class VPNService:
                 "is_active": True,
             }
 
-    async def ensure_migration_8449_access_record(
-        self,
-        telegram_id: int,
-        device_number: int = 1,
-        device_name: str | None = None,
-    ) -> dict:
-        """Create or refresh a parallel rescue access on inbound 9 / port 8449.
-
-        This does not delete or disable old 443 access records.
-        It is used for soft migration when the user opens the subscription link screen.
-        """
-        email = f"user_{telegram_id}_{device_number}_m8449"
-        db_device_number = 100 + device_number
-
-        old_inbound_id = self.inbound_id
-        old_server_name = self.server_name
-
-        try:
-            self.inbound_id = MIGRATION_INBOUND_ID
-            self.server_name = MIGRATION_SERVER_NAME
-
-            panel_result = await self.create_vpn_user(
-                telegram_id=telegram_id,
-                device_number=device_number,
-                email=email,
-            )
-        finally:
-            self.inbound_id = old_inbound_id
-            self.server_name = old_server_name
-
-        client = panel_result["client"]
-        config_url = panel_result["config_url"]
-
-        async with async_session_maker() as session:
-            user_result = await session.execute(
-                select(User).where(User.telegram_id == telegram_id)
-            )
-            user = user_result.scalar_one_or_none()
-
-            if user is None:
-                raise VPNServiceError(f"Пользователь с telegram_id={telegram_id} не найден в БД")
-
-            access_result = await session.execute(
-                select(VPNAccess).where(
-                    VPNAccess.user_id == user.id,
-                    VPNAccess.external_id == email,
-                )
-            )
-            access = access_result.scalar_one_or_none()
-
-            if access is None:
-                access = VPNAccess(
-                    user_id=user.id,
-                    server_name=MIGRATION_SERVER_NAME,
-                    external_id=client["email"],
-                    client_uuid=client["id"],
-                    config_url=config_url,
-                    is_active=True,
-                    device_number=db_device_number,
-                    device_name=device_name or "Новое подключение",
-                )
-                session.add(access)
-            else:
-                access.server_name = MIGRATION_SERVER_NAME
-                access.external_id = client["email"]
-                access.client_uuid = client["id"]
-                access.config_url = config_url
-                access.is_active = True
-                access.device_number = db_device_number
-                if device_name:
-                    access.device_name = device_name
-
-            await session.commit()
-
-            return {
-                "user_id": user.id,
-                "device_number": db_device_number,
-                "external_id": client["email"],
-                "client_uuid": client["id"],
-                "config_url": config_url,
-                "created_in_panel": panel_result["created"],
-                "is_active": True,
-            }
-
-
     async def ensure_registry_server_access_record(
         self,
         telegram_id: int,
@@ -649,26 +567,10 @@ class VPNService:
                 "is_active": True,
             }
 
-
     @staticmethod
     def _subscription_device_number_for_server(server_code: str, index: int) -> int:
-        # Keep existing technical slots stable for current production nodes.
-        fixed = {
-            "germany_1": 101,
-            "netherlands_1": 102,
-            "swpg_1": 103,
-            "prod_1": 104,
-        }
-
-        if server_code in fixed:
-            return fixed[server_code]
-
-        # Deterministic fallback for future VLESS nodes.
-        # Keep it away from legacy real-device slots and HY2 test slots.
-        import zlib
-
-        return 1000 + (zlib.crc32(server_code.encode("utf-8")) % 7000)
-
+        del index
+        return get_vless_device_number(server_code)
 
     @staticmethod
     def _load_server_secret_values() -> dict[str, str]:
@@ -692,18 +594,8 @@ class VPNService:
 
     @staticmethod
     def _hy2_device_number_for_server(server_code: str, index: int) -> int:
-        fixed = {
-            "germany_1": 9001,
-            "netherlands_1": 9002,
-            "prod_1": 9003,
-        }
-
-        if server_code in fixed:
-            return fixed[server_code]
-
-        import zlib
-
-        return 9000 + (zlib.crc32(server_code.encode("utf-8")) % 900)
+        del index
+        return get_hy2_device_number(server_code)
 
     async def ensure_hy2_subscription_access_record(
         self,
@@ -798,23 +690,31 @@ class VPNService:
                 "skipped": False,
             }
 
-
     async def ensure_subscription_access_records(self, telegram_id: int) -> dict:
-        """Provision active technical access records for all enabled VLESS registry nodes.
+        """Provision the current two-node topology: PROD and Netherlands.
 
-        This is the normal subscription-link provisioning path.
-        Adding a new enabled VLESS server to /etc/void/servers.json should make it
-        available for users on the next subscription refresh/open.
+        Each physical node contributes one VLESS/Reality connection and one HY2
+        connection. Other registry entries are intentionally ignored.
         """
-        nodes = [
-            node
+        enabled_by_code = {
+            node.code: node
             for node in load_enabled_server_nodes()
             if (node.protocol or "").lower() == "vless"
+            and node.code in CURRENT_SUBSCRIPTION_SERVER_CODES
+        }
+
+        missing_codes = [
+            code
+            for code in CURRENT_SUBSCRIPTION_SERVER_CODES
+            if code not in enabled_by_code
         ]
+        if missing_codes:
+            raise VPNServiceError(
+                "Current subscription node(s) missing or disabled in registry: "
+                + ", ".join(missing_codes)
+            )
 
-        if not nodes:
-            raise VPNServiceError("В registry нет enabled VLESS-серверов")
-
+        nodes = [enabled_by_code[code] for code in CURRENT_SUBSCRIPTION_SERVER_CODES]
         provisioned_count = 0
         errors: list[str] = []
         results: list[dict] = []
@@ -833,13 +733,7 @@ class VPNService:
             except Exception as exc:
                 errors.append(f"{node.code}: {type(exc).__name__}: {exc}")
 
-        hy2_nodes = [
-            node
-            for node in load_enabled_server_nodes()
-            if (node.protocol or "").lower() == "vless"
-        ]
-
-        for index, node in enumerate(hy2_nodes, start=1):
+        for index, node in enumerate(nodes, start=1):
             try:
                 result = await self.ensure_hy2_subscription_access_record(
                     telegram_id=telegram_id,
@@ -857,12 +751,11 @@ class VPNService:
                 errors.append(f"{node.code}/hy2: {type(exc).__name__}: {exc}")
 
         return {
-            "total": len(nodes) + len(hy2_nodes),
+            "total": len(CURRENT_SUBSCRIPTION_SERVER_CODES) * 2,
             "provisioned_count": provisioned_count,
             "errors": errors,
             "results": results,
         }
-
 
     async def get_access_records(self, telegram_id: int) -> list[VPNAccess]:
         async with async_session_maker() as session:
