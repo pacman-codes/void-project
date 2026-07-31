@@ -5,7 +5,6 @@ CURRENT_SUBSCRIPTION_SERVER_CODES = (
     "prod_1",
     "netherlands_1",
 )
-CURRENT_SUBSCRIPTION_SERVER_CODE_SET = frozenset(CURRENT_SUBSCRIPTION_SERVER_CODES)
 
 VLESS_TECHNICAL_DEVICE_NUMBERS = {
     "prod_1": 104,
@@ -15,9 +14,6 @@ HY2_TECHNICAL_DEVICE_NUMBERS = {
     "prod_1": 9003,
     "netherlands_1": 9002,
 }
-
-VLESS_TECHNICAL_DEVICE_MIN = 100
-HY2_TECHNICAL_DEVICE_MIN = 9000
 
 
 def get_vless_device_number(server_code: str) -> int:
