@@ -9,6 +9,19 @@ BACKUP_DIR="$BACKUP_ROOT/$NOW"
 cd "$PROJECT_DIR"
 mkdir -p "$BACKUP_DIR"
 
+cleanup_partial_backup() {
+    exit_code=$?
+
+    if [ "$exit_code" -ne 0 ]; then
+        echo "Backup failed; removing partial directory: $BACKUP_DIR" >&2
+        rm -rf -- "$BACKUP_DIR"
+    fi
+
+    exit "$exit_code"
+}
+
+trap cleanup_partial_backup EXIT
+
 echo "== Backup start =="
 echo "backup_dir=$BACKUP_DIR"
 
@@ -34,7 +47,9 @@ print(url)
 PY
 )"
 
-pg_dump "$PG_DUMP_URL" > "$BACKUP_DIR/botdb.sql"
+pg_dump "$PG_DUMP_URL" \
+  --exclude-table='public.vpn_accesses_backup_*' \
+  > "$BACKUP_DIR/botdb.sql"
 
 echo "== Project files snapshot =="
 tar -C "$(dirname "$PROJECT_DIR")" -czf "$BACKUP_DIR/project_files.tar.gz" \
@@ -79,6 +94,9 @@ MANIFEST
 
 echo "== Compress =="
 tar -C "$BACKUP_ROOT" -czf "$BACKUP_ROOT/$NOW.tar.gz" "$NOW"
+
+echo "== Remove staging directory =="
+rm -rf -- "$BACKUP_DIR"
 
 echo "== Cleanup old backups =="
 find "$BACKUP_ROOT" -maxdepth 1 -name "*.tar.gz" -type f -mtime +14 -print -delete || true

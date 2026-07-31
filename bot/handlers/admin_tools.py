@@ -614,10 +614,24 @@ def build_admin_user_text(
 
     text = "\n".join(lines).strip()
 
-    if len(text) > 3900:
-        text = text[:3800].rstrip() + "\n\n...truncated"
+    if len(text) <= 3900:
+        return text
 
-    return text
+    suffix = "\n\n...truncated"
+    content_limit = 3900 - len(suffix)
+    safe_lines: list[str] = []
+    current_length = 0
+
+    for line in lines:
+        added_length = len(line) + (1 if safe_lines else 0)
+
+        if current_length + added_length > content_limit:
+            break
+
+        safe_lines.append(line)
+        current_length += added_length
+
+    return "\n".join(safe_lines).rstrip() + suffix
 
 
 
