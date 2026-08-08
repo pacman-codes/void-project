@@ -52,6 +52,7 @@ class ServerNode:
 class PanelCredentials:
     username: str
     password: str
+    api_token: str = ""
 
 
 def _load_json_file(path: str) -> dict:
@@ -222,9 +223,11 @@ def load_panel_credentials(
 
     username_key = f"{server.secret_ref}_PANEL_USERNAME"
     password_key = f"{server.secret_ref}_PANEL_PASSWORD"
+    api_token_key = f"{server.secret_ref}_PANEL_API_TOKEN"
 
     username = values.get(username_key, "").strip()
     password = values.get(password_key, "").strip()
+    api_token = values.get(api_token_key, "").strip()
 
     if not username:
         raise ServerRegistryError(f"Missing secret: {username_key}")
@@ -232,7 +235,11 @@ def load_panel_credentials(
     if not password:
         raise ServerRegistryError(f"Missing secret: {password_key}")
 
-    return PanelCredentials(username=username, password=password)
+    return PanelCredentials(
+        username=username,
+        password=password,
+        api_token=api_token,
+    )
 
 
 def get_enabled_direct_cidrs(path: str | None = None) -> list[str]:

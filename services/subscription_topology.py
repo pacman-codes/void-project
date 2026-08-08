@@ -4,15 +4,18 @@ from __future__ import annotations
 CURRENT_SUBSCRIPTION_SERVER_CODES = (
     "prod_1",
     "netherlands_1",
+    "node3",
 )
 
 VLESS_TECHNICAL_DEVICE_NUMBERS = {
     "prod_1": 104,
     "netherlands_1": 102,
+    "node3": 105,
 }
 HY2_TECHNICAL_DEVICE_NUMBERS = {
     "prod_1": 9003,
     "netherlands_1": 9002,
+    "node3": 9005,
 }
 
 

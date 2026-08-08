@@ -72,6 +72,7 @@ class PanelClient:
             self.base_path = server.panel_path
             self.username = creds.username
             self.password = creds.password
+            self.api_token = creds.api_token
             self.inbound_id = int(server.inbound_id)
             self.server_code = server.code
         else:
@@ -80,6 +81,11 @@ class PanelClient:
             self.base_path = config.panel_path
             self.username = config.panel_username
             self.password = config.panel_password
+            self.api_token = (
+                __import__("os")
+                .getenv("PANEL_API_TOKEN", "")
+                .strip()
+            )
             self.inbound_id = int(__import__("os").getenv("PANEL_INBOUND_ID", "0") or 0)
             self.server_code = "legacy"
 
@@ -109,14 +115,21 @@ class PanelClient:
         return f"{self.base_url}{path}"
 
     async def _build_client(self) -> httpx.AsyncClient:
+        headers = {
+            "User-Agent": "telegram-bot-panel-client/1.0",
+            "Accept": "application/json, text/plain, */*",
+        }
+
+        if self.api_token:
+            headers["Authorization"] = (
+                f"Bearer {self.api_token}"
+            )
+
         return httpx.AsyncClient(
             verify=self.verify_ssl,
             timeout=self.timeout,
             follow_redirects=True,
-            headers={
-                "User-Agent": "telegram-bot-panel-client/1.0",
-                "Accept": "application/json, text/plain, */*",
-            },
+            headers=headers,
         )
 
     @staticmethod
@@ -267,6 +280,9 @@ class PanelClient:
 
     async def login(self) -> httpx.AsyncClient:
         client = await self._build_client()
+
+        if self.api_token:
+            return client
 
         try:
             csrf_token = await self._get_csrf_token_with_client(client)
@@ -518,7 +534,11 @@ class PanelClient:
 
         client = await self.login()
         try:
-            csrf_token = await self._get_csrf_token_with_client(client)
+            csrf_token = (
+                None
+                if self.api_token
+                else await self._get_csrf_token_with_client(client)
+            )
             headers = {"X-Requested-With": "XMLHttpRequest"}
             if csrf_token:
                 headers["X-CSRF-Token"] = csrf_token
@@ -580,7 +600,11 @@ class PanelClient:
         client = await self.login()
 
         try:
-            csrf_token = await self._get_csrf_token_with_client(client)
+            csrf_token = (
+                None
+                if self.api_token
+                else await self._get_csrf_token_with_client(client)
+            )
 
             headers = {
                 "X-Requested-With": "XMLHttpRequest",
