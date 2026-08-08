@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
+import logging
 import os
 import re
 import secrets
@@ -12,6 +14,11 @@ from sqlalchemy import select
 
 from db.database import async_session_maker
 from db.models import User, UserSubscriptionLink, VPNAccess
+from services.subscription_topology import (
+    CURRENT_SUBSCRIPTION_SERVER_CODES,
+    get_hy2_device_number,
+    get_vless_device_number,
+)
 
 try:
     from services.server_registry import load_server_nodes
@@ -21,6 +28,13 @@ except Exception:
 
 RAW_KEY_GRACE_DAYS = 5
 DEFAULT_FREE_TRAFFIC_LIMIT_MB = 3072
+
+logger = logging.getLogger(__name__)
+
+# Subscription requests are handled on one asyncio loop in the subscription
+# service. Serializing the rare repair path prevents two simultaneous refreshes
+# from racing to create the same panel client.
+_subscription_provision_lock = asyncio.Lock()
 
 
 class SubscriptionLinkError(Exception):
@@ -45,6 +59,132 @@ def _user_has_active_access(user: User) -> bool:
         return bool(user.subscription_expiry and user.subscription_expiry > _now())
 
     return False
+
+
+def _expected_subscription_slots() -> set[tuple[str, int]]:
+    slots: set[tuple[str, int]] = set()
+
+    for server_code in CURRENT_SUBSCRIPTION_SERVER_CODES:
+        slots.add((
+            server_code,
+            get_vless_device_number(server_code),
+        ))
+        slots.add((
+            server_code,
+            get_hy2_device_number(server_code),
+        ))
+
+    return slots
+
+
+def _present_subscription_slots(
+    rows: list[VPNAccess],
+) -> set[tuple[str, int]]:
+    result: set[tuple[str, int]] = set()
+
+    for row in rows:
+        server_name = (row.server_name or "").strip()
+
+        try:
+            device_number = int(row.device_number or 0)
+        except Exception:
+            device_number = 0
+
+        if (
+            server_name
+            and device_number > 0
+            and bool(row.is_active)
+            and bool((row.config_url or "").strip())
+        ):
+            result.add((server_name, device_number))
+
+    return result
+
+
+def _subscription_rows_need_provisioning(
+    rows: list[VPNAccess],
+) -> bool:
+    expected = _expected_subscription_slots()
+    present = _present_subscription_slots(rows)
+
+    return not expected.issubset(present)
+
+
+async def _load_active_access_rows(
+    session,
+    user_id: int,
+) -> list[VPNAccess]:
+    result = await session.execute(
+        select(VPNAccess)
+        .where(
+            VPNAccess.user_id == user_id,
+            VPNAccess.is_active.is_(True),
+            VPNAccess.config_url.is_not(None),
+        )
+        .order_by(VPNAccess.id.asc())
+        .execution_options(populate_existing=True)
+    )
+
+    return list(result.scalars().all())
+
+
+async def _ensure_current_subscription_rows(
+    session,
+    user: User,
+    rows: list[VPNAccess],
+) -> list[VPNAccess]:
+    """Repair missing current-topology rows only when they are actually absent.
+
+    Normal subscription refreshes stay read-only with respect to panel APIs.
+    The more expensive provisioning path runs only for an incomplete topology.
+    """
+    if not _subscription_rows_need_provisioning(rows):
+        return rows
+
+    async with _subscription_provision_lock:
+        # Another request may have repaired this user while we were waiting.
+        current_rows = await _load_active_access_rows(
+            session,
+            user.id,
+        )
+
+        if not _subscription_rows_need_provisioning(current_rows):
+            return current_rows
+
+        # Local import keeps the subscription module independent during import
+        # time and avoids unnecessary VPN/panel initialization for normal GETs.
+        from services.vpn_service import VPNService
+
+        try:
+            result = await VPNService().ensure_subscription_access_records(
+                int(user.telegram_id)
+            )
+        except Exception:
+            logger.exception(
+                "Lazy subscription provisioning failed for telegram_id=%s",
+                user.telegram_id,
+            )
+
+            # Preserve any already-working rows. The normal subscription
+            # validation below will still reject the request if none exist.
+            return current_rows
+
+        errors = result.get("errors") or []
+
+        if errors:
+            logger.warning(
+                "Lazy subscription provisioning completed with errors "
+                "for telegram_id=%s: %s",
+                user.telegram_id,
+                "; ".join(str(item) for item in errors),
+            )
+
+        # VPNService writes through separate AsyncSession instances.
+        # READ COMMITTED plus populate_existing gives this request a fresh view.
+        return await _load_active_access_rows(
+            session,
+            user.id,
+        )
 
 
 def build_public_subscription_url(token: str) -> str:
@@ -560,16 +700,16 @@ async def _load_subscription_context(token: str) -> tuple[User, list[VPNAccess],
         if not _user_has_active_access(user):
             raise SubscriptionLinkError("Доступ не активен")
 
-        access_result = await session.execute(
-            select(VPNAccess)
-            .where(
-                VPNAccess.user_id == user.id,
-                VPNAccess.is_active.is_(True),
-                VPNAccess.config_url.is_not(None),
-            )
-            .order_by(VPNAccess.id.asc())
+        rows = await _load_active_access_rows(
+            session,
+            user.id,
         )
-        rows = list(access_result.scalars().all())
+
+        rows = await _ensure_current_subscription_rows(
+            session,
+            user,
+            rows,
+        )
 
         by_code, by_endpoint = _load_registry_maps()
 

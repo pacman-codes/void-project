@@ -554,10 +554,77 @@ class PanelClient:
                 "Панель ответила success=true, но созданный клиент не найден повторным чтением inbound"
             )
 
+        # 3x-ui 3.1/3.2 can persist a newly added VLESS client in its
+        # DB/API without applying that client to the currently running
+        # Xray process. This caused panel/runtime drift in production.
+        #
+        # A newly created client is not considered ready until Xray has
+        # been explicitly reloaded from the panel state.
+        runtime_restart = await self.restart_xray_service()
+
         return {
             "success": True,
             "message": data.get("msg", ""),
             "client": created,
+            "runtime_restarted": True,
+            "runtime_restart_message": runtime_restart.get("message", ""),
+        }
+
+    async def restart_xray_service(self) -> dict[str, Any]:
+        """Restart the Xray child process through the authenticated 3x-ui API.
+
+        Use this after mutations that must be present in the real running
+        Xray process. A successful panel DB/API write alone is not enough:
+        production has demonstrated panel/runtime client drift.
+        """
+        client = await self.login()
+
+        try:
+            csrf_token = await self._get_csrf_token_with_client(client)
+
+            headers = {
+                "X-Requested-With": "XMLHttpRequest",
+            }
+
+            if csrf_token:
+                headers["X-CSRF-Token"] = csrf_token
+
+            response = await client.post(
+                self._url("/panel/api/server/restartXrayService"),
+                headers=headers,
+            )
+
+            if response.status_code >= 400:
+                raise PanelRequestError(
+                    f"Панель вернула HTTP {response.status_code} для "
+                    f"{response.url}. Body: {response.text[:500]}"
+                )
+
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise PanelRequestError(
+                    f"Панель вернула не JSON для {response.url}. "
+                    f"Body: {response.text[:500]}"
+                ) from exc
+
+        finally:
+            await client.aclose()
+
+        if not isinstance(data, dict):
+            raise PanelRequestError(
+                "Панель вернула неожиданный ответ при restartXrayService"
+            )
+
+        if not data.get("success"):
+            raise PanelRequestError(
+                f"Панель вернула success=false при restartXrayService: {data}"
+            )
+
+        return {
+            "success": True,
+            "message": data.get("msg", ""),
+            "server_code": self.server_code,
         }
 
     async def update_client_enable(
