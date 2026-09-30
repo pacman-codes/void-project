@@ -1,0 +1,41 @@
+name: Soodoo migration tools
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "scripts/export_soodoo_migration.py"
+      - "scripts/notify_soodoo_transition.py"
+      - "tests/test_soodoo_migration_tools.py"
+      - ".github/workflows/soodoo-migration-tools.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/export_soodoo_migration.py"
+      - "scripts/notify_soodoo_transition.py"
+      - "tests/test_soodoo_migration_tools.py"
+      - ".github/workflows/soodoo-migration-tools.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile
+        run: |
+          python -m py_compile \
+            scripts/export_soodoo_migration.py \
+            scripts/notify_soodoo_transition.py \
+            tests/test_soodoo_migration_tools.py
+      - name: Safety contract
+        run: python -m unittest tests.test_soodoo_migration_tools -v
+      - name: Diff hygiene
+        run: git diff --check
