@@ -26,6 +26,7 @@ class SoodooMigrationToolTests(unittest.TestCase):
 
     def test_export_writes_private_manifest_and_digest(self) -> None:
         source = EXPORT.read_text(encoding="utf-8")
+        self.assertIn("import contextlib", source)
         self.assertIn("0o600", source)
         self.assertIn("hashlib.sha256(raw).hexdigest()", source)
         self.assertIn("MANIFEST_SHA256=", source)
