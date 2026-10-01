@@ -95,34 +95,36 @@ async def export_manifest(output: Path) -> int:
                 select(User).order_by(User.telegram_id)
             )
         )
+
+        if not users:
+            await session.rollback()
+            print("VOID_EXPORT_FAILED=NO_USERS")
+            return 2
+
+        ids = [int(user.telegram_id) for user in users]
+        if any(value <= 0 for value in ids) or len(ids) != len(set(ids)):
+            await session.rollback()
+            print("VOID_EXPORT_FAILED=IDENTITY")
+            return 2
+
+        now = datetime.now(timezone.utc)
+        document = build_document(users, now)
+        future = 0
+        paid_active = 0
+        for user in users:
+            expiry = user.subscription_expiry
+            if expiry is not None:
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                if expiry.astimezone(timezone.utc) > now:
+                    future += 1
+                    if bool(user.is_active) or str(user.access_type or "").lower() == "paid":
+                        paid_active += 1
         await session.rollback()
 
-    if not users:
-        print("VOID_EXPORT_FAILED=NO_USERS")
-        return 2
-
-    ids = [int(user.telegram_id) for user in users]
-    if any(value <= 0 for value in ids) or len(ids) != len(set(ids)):
-        print("VOID_EXPORT_FAILED=IDENTITY")
-        return 2
-
-    now = datetime.now(timezone.utc)
-    document = build_document(users, now)
     raw = encode_document(document)
     digest = hashlib.sha256(raw).hexdigest()
     write_private(output, raw)
-
-    future = 0
-    paid_active = 0
-    for user in users:
-        expiry = user.subscription_expiry
-        if expiry is not None:
-            if expiry.tzinfo is None:
-                expiry = expiry.replace(tzinfo=timezone.utc)
-            if expiry.astimezone(timezone.utc) > now:
-                future += 1
-                if bool(user.is_active) or str(user.access_type or "").lower() == "paid":
-                    paid_active += 1
 
     print("VOID_EXPORT_OK")
     print(f"SOURCE_USERS={len(users)}")
