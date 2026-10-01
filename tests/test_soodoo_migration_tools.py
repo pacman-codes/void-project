@@ -31,6 +31,13 @@ class SoodooMigrationToolTests(unittest.TestCase):
         self.assertIn("MANIFEST_SHA256=", source)
         self.assertIn("SOURCE_USERS=", source)
 
+    def test_export_materializes_orm_values_before_rollback(self) -> None:
+        source = EXPORT.read_text(encoding="utf-8")
+        build_index = source.index("document = build_document(users, now)")
+        rollback_index = source.index("await session.rollback()", build_index)
+        self.assertLess(build_index, rollback_index)
+        self.assertLess(source.index("ids = [int(user.telegram_id)"), rollback_index)
+
     def test_notification_defaults_to_dry_run(self) -> None:
         source = NOTIFY.read_text(encoding="utf-8")
         self.assertIn('parser.add_argument("--send", action="store_true")', source)
